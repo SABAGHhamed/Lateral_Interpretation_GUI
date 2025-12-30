@@ -163,23 +163,8 @@ Return to **More → Plotting**, choose `manual.npz`, set **Overlay** to `None`,
 
 ---
 
-## Troubleshooting & tips
-
-* If **no layers** are detected:
-
-  * Lower **Line Length Threshold**
-  * Confirm correct crossline/inline index
-* If contours look noisy:
-
-  * Increase smoothing strength
-* If SEGY cannot be read:
-
-  * Ensure `cigsegy` is installed
-  * Run `check_env.py`
-
----
-
 ## Where to find more detail
 
 * Read the paper: *Lateral Interpretation: A New Method for High Resolution Seismic Stratigraphy*
 * Open the **Help** menu inside the GUI for detailed usage notes and credits
+
