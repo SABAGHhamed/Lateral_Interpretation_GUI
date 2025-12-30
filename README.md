@@ -79,8 +79,9 @@ https://cigsegy.readthedocs.io/en/latest/
 
    python run_gui.py
 
-```markdown
-- [Quick tutorial: Interpret XL480 (example)](TUTORIAL.md)
+## Tutorial
+
+- 👉 [Quick tutorial: Interpret XL480 (example)](TUTORIAL.md)
 
 ## Notes
 - Further details are provided within the paper and GUI Help section.
