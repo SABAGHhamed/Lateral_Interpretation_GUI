@@ -1,0 +1,11 @@
+numpy
+scipy
+matplotlib
+pandas
+scikit-learn
+opencv-python
+Pillow
+scikit-image
+shapely
+ipython
+cigsegy

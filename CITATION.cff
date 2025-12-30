@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: Sabagh
+    given-names: Hamed
+title: "Lateral Interpretation GUI"
+version: 1.0.0
+date-released: 2025-01-01
+url: "https://github.com/SABAGHhamed/Lateral_Interpretation_GUI"
+license: MIT
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Sabagh
+      given-names: Hamed
+    - family-names: Naruse
+      given-names: H.
+  title: "Lateral Interpretation: A New Method for High Resolution Seismic Stratigraphy"
+  journal: "Computers & Geosciences"
+  status: under review
