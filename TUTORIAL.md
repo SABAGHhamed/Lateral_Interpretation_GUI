@@ -26,7 +26,7 @@ We will:
 2. Load the example SEGY and select crossline XL480.
 3. Crop the profile, run the automated Lateral Interpretation pipeline,
    inspect automatic contours, run TSP/onlap/smoothing stages,
-   and finally demonstrate a short manual edit step.
+   and finally demonstrate a short manual interpretation step.
 4. Save example `.npz` outputs and plots.
 
 ---
@@ -135,7 +135,7 @@ For each stage:
 1. Go to **More → Manual Interpretation**.
 2. Click a red layer outline to select it, then press **Merge**.
 
-![Manual edit animation](tutorial_images/manual.gif)
+![Manual Interpretation animation](tutorial_images/manual.gif)
 
 3. Press **Finish**.
 4. In the **Contour Detection** dialog:
@@ -156,9 +156,10 @@ Return to **More → Plotting**, choose `manual.npz`, set **Overlay** to `None`,
 
 * `contours.npz` — extracted contours
 * `tsp.npz` — TSP connection
-* `onlap.npz` — onlap/downlap result
-* `feature.npz` — features for plotting
-* `manual.npz` — after manual edits
+* `onlap.npz` — onlap/downlap connection result
+* `smooth.npz` — vertical smoothing result
+* `feature.npz` — extracted features (if feature extraction is not applied, it is the same as smooth.npz)
+* `manual.npz` — manual interpretation result
 * Plot images (`*.png`)
 
 ---
@@ -167,4 +168,5 @@ Return to **More → Plotting**, choose `manual.npz`, set **Overlay** to `None`,
 
 * Read the paper: *Lateral Interpretation: A New Method for High Resolution Seismic Stratigraphy*
 * Open the **Help** menu inside the GUI for detailed usage notes and credits
+
 
