@@ -1225,11 +1225,16 @@ class SeismicApp:
     def skip_launch_plotting_gui(self):
         try:
             # below will run if click and drag event is not performed
-            self.x_start = self.x_start_var.get()
-            self.y_start = self.y_start_var.get()
-            self.crossline_val = self.crossline_var.get()
-            self.twt_spacing = self.rescaling_constant_var.get()
-            self.initial_inline = int(self.l_threshold_entry.get())
+            if self.x_start is None:
+                self.x_start = self.x_start_var.get()
+            if self.y_start is None:    
+                self.y_start = self.y_start_var.get()
+            if self.crossline_val is None:
+                self.crossline_val = self.crossline_var.get()
+            if self.twt_spacing is None:
+                self.twt_spacing = self.rescaling_constant_var.get()
+            if self.initial_inline is None:
+                self.initial_inline = int(self.l_threshold_entry.get())
 
             self.root.withdraw()
             launch_plotting_gui(self)
@@ -3723,4 +3728,5 @@ def main():
 if __name__ == "__main__":
     multiprocessing.freeze_support() # This line stops the subprocesses from re-running main() recursively
     
+
     main()
