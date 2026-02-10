@@ -3,7 +3,7 @@
 This repository contains the Python source code for the **Lateral Interpretation (LI)**
 method described in:
 
-> Sabagh, H., Naruse, H., *Lateral Interpretation: A New Method for High Resolution Seismic Stratigraphy*, Computers & Geosciences (under review).
+> Sabagh, H., Naruse, H., *Lateral Interpretation: A New Method for High Resolution Seismic Stratigraphy*, The Leading Edge (under review).
 
 ## Requirements
 - Python ≥ 3.8
@@ -91,3 +91,4 @@ https://cigsegy.readthedocs.io/en/latest/
 ## License
 
 This software is released under the MIT License. See the `LICENSE` file for details.
+
