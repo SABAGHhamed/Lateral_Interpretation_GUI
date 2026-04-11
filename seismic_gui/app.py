@@ -770,7 +770,6 @@ class SeismicApp:
         container = tk.Frame(credit_tab, bg=bg)
         container.pack(fill=tk.BOTH, expand=True, padx=12, pady=5)
 
-        
         credit_items = [
 
             (
@@ -821,11 +820,19 @@ class SeismicApp:
 
             (
                 "Third-Party Libraries",
-                "This software uses the CIGSEGY library for reading SEG-Y seismic data:\n\n"
+                "This software uses external libraries for reading SEG-Y seismic data:\n\n"
+                "Primary library (default):\n"
                 "Li, J. “CIGSEGY: A tool for exchanging data between SEG-Y format and NumPy array "
                 "inside Python environment”.\n\n"
                 "Project URL: https://github.com/JintaoLee-Roger/cigsegy\n"
-                "Documentation: https://cigsegy.readthedocs.io/en/latest/"
+                "Documentation: https://cigsegy.readthedocs.io/en/latest/\n\n"
+                "CIGSEGY is used as the default due to its speed and convenience for standard seismic data.\n\n"
+                "Fallback library (specialized cases):\n"
+                "segyio – a Python library for low-level interaction with SEG-Y files.\n\n"
+                "Project URL: https://github.com/equinor/segyio\n"
+                "Documentation: https://segyio.readthedocs.io\n\n"
+                "segyio is licensed under the LGPL and is used only in rare cases where SEG-Y files "
+                "represent 2D seismic images rather than standard volumetric data."
             ),
 
             (
@@ -843,10 +850,11 @@ class SeismicApp:
             parent_tab=credit_tab,
             container=container,
             items=credit_items,
-            items_per_page=3,
+            items_per_page=1,
             index_attr_name="page_index",
             bg="white"
         )
+
 
 
 
