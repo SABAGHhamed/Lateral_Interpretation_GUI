@@ -9,3 +9,4 @@ scikit-image
 shapely
 ipython
 cigsegy
+segyio
