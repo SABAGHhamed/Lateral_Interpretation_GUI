@@ -946,75 +946,343 @@ class SeismicApp:
 
         self.inline = inline_num - int(self.l_threshold_entry.get())
 
-        # ---------- Try seismic first ----------
+
+        ######################################################
+        ### needed for data with very high resolution (old method, causes small rigged places)
+        # def limit_resolution(arr, max_res=(291, 1250)):
+            # """
+            # Downsample 2D seismic/image array if its resolution exceeds max_res.
+            # max_res is defined as (TWT, CDP).
+            # """
+
+            # if arr is None or arr.ndim != 2:
+                # return arr
+
+            # h, w = arr.shape
+
+            # max_diag = math.sqrt(max_res[0]**2 + max_res[1]**2)
+            # current_diag = math.sqrt(h**2 + w**2)
+
+            # if current_diag <= max_diag:
+                # return arr
+
+            # scale = current_diag / max_diag
+            # step = int(np.ceil(scale))  # making the scale integer in ceiling way
+
+            # return arr[::step, ::step]  # smart way to implement multiplication factor (scale)  as skipping factor in integrations
+            
+
+
+        
+        # def limit_resolution(arr, max_res=(291, 1250), horizontal_bias=0.0):
+            # """
+            # Downsample 2D array using sign-frequency + max-amplitude logic,
+            # with directional (anisotropic) compression.
+
+            # horizontal_bias ∈ [0,1]:
+                # lower → stronger horizontal compression
+                # higher → more balanced compression
+            # """
+
+            # if arr is None or arr.ndim != 2:
+                # return arr
+
+            # h, w = arr.shape
+
+            # # --- diagonal scaling ---
+            # max_diag = math.sqrt(max_res[0]**2 + max_res[1]**2)
+            # current_diag = math.sqrt(h**2 + w**2)
+
+            # if current_diag <= max_diag:
+                # return arr
+
+            # scale = current_diag / max_diag
+            # base_step = int(np.ceil(scale))
+
+            # # --- anisotropic steps ---
+            # horizontal_bias = np.clip(horizontal_bias, 0.0, 1.0)
+
+            # step_y = max(1, int(np.ceil(base_step * horizontal_bias)))
+            # step_x = max(1, int(np.ceil(base_step * (1 + (1 - horizontal_bias)))))
+
+            # new_h = h // step_y
+            # new_w = w // step_x
+
+            # reduced = np.zeros((new_h, new_w), dtype=arr.dtype)
+
+            # for i in range(new_h):
+                # for j in range(new_w):
+
+                    # block = arr[
+                        # i * step_y:(i + 1) * step_y,
+                        # j * step_x:(j + 1) * step_x
+                    # ]
+
+                    # if block.size == 0:
+                        # continue
+
+                    # flat = block.ravel()
+
+                    # # --- sign frequency ---
+                    # pos_mask = flat > 0
+                    # neg_mask = flat < 0
+
+                    # pos_count = np.sum(pos_mask)
+                    # neg_count = np.sum(neg_mask)
+
+                    # dominant_mask = pos_mask if pos_count >= neg_count else neg_mask
+
+                    # # fallback if all zeros
+                    # if not np.any(dominant_mask):
+                        # reduced[i, j] = 0
+                        # continue
+
+                    # # --- max amplitude within dominant sign ---
+                    # candidates = flat[dominant_mask]
+                    # idx = np.argmax(np.abs(candidates))
+                    # reduced[i, j] = candidates[idx]
+
+            # return reduced
+
+        def limit_resolution(arr, max_res=(291, 1250)):
+            """
+            Downsample 2D seismic/image array using sign-frequency + max-amplitude logic.
+
+            For each block:
+            1) Determine dominant sign (most frequent: positive vs negative)
+            2) From that sign group, pick the value with highest absolute amplitude
+            """
+
+            if arr is None or arr.ndim != 2:
+                return arr
+
+            h, w = arr.shape
+
+            max_diag = math.sqrt(max_res[0]**2 + max_res[1]**2)
+            current_diag = math.sqrt(h**2 + w**2)
+
+            if current_diag <= max_diag:
+                return arr
+
+            scale = current_diag / max_diag
+            step = int(np.ceil(scale))
+
+            new_h = h // step
+            new_w = w // step
+
+            reduced = np.zeros((new_h, new_w), dtype=arr.dtype)
+
+            for i in range(new_h):
+                for j in range(new_w):
+
+                    block = arr[i*step:(i+1)*step, j*step:(j+1)*step]
+
+                    if block.size == 0:
+                        continue
+
+                    flat = block.flatten()
+
+                    # --- 1) sign frequency ---
+                    pos_mask = flat > 0
+                    neg_mask = flat < 0
+
+                    pos_count = np.sum(pos_mask)
+                    neg_count = np.sum(neg_mask)
+
+                    # choose dominant sign
+                    if pos_count >= neg_count:
+                        dominant_mask = pos_mask
+                    else:
+                        dominant_mask = neg_mask
+
+                    # fallback if all zeros
+                    if not np.any(dominant_mask):
+                        reduced[i, j] = 0
+                        continue
+
+                    # --- 2) max amplitude within dominant sign ---
+                    candidates = flat[dominant_mask]
+
+                    # pick value with max absolute amplitude but keep original sign
+                    idx = np.argmax(np.abs(candidates))
+                    reduced[i, j] = candidates[idx]
+
+            return reduced            
+        ######################################################    
+
+        is_image_file = False
+        is_2d_segy = False
+        is_cube = False
+        d_cube = None
+
+
+        # ==========================================================
+        # Stage 1 — IMAGE
+        # ==========================================================
         try:
-            d = cigsegy.fromfile(file_path)
-            self.data = d
-            self.is_image = False
-            self.label.config(text=f"Loaded profile: {os.path.basename(file_path)}")
+            img_raw = Image.open(file_path)
+            img_raw.verify()
+            img_raw = Image.open(file_path)
+
+            mode = img_raw.mode
+
+            if mode == 'RGB':
+                rgb_arr = np.asarray(img_raw, dtype=np.float32)
+                R = rgb_arr[:, :, 0]
+                B = rgb_arr[:, :, 2]
+
+                arr = np.zeros(R.shape, dtype=np.float32)
+                not_both_zero = (R != 0) | (B != 0)
+
+                arr[not_both_zero] = (
+                    (R[not_both_zero] - B[not_both_zero]) *
+                    (R[not_both_zero] + B[not_both_zero]) / 2
+                )
+            else:
+                img_l = img_raw.convert("L")
+                gray_arr = np.asarray(img_l, dtype=np.float32)
+                arr = np.where(gray_arr >= 127.5, gray_arr, -gray_arr)
+
+            is_image_file = True
 
         except Exception:
-            # ---------- Fallback to image ----------
+            is_image_file = False
+
+
+        # ==========================================================
+        # Stage 2 — SEG-Y TEXTUAL HEADER CHECK (CAPTURE PRINT OUTPUT)
+        # ==========================================================
+        if not is_image_file:
+
+            import io
+            import sys
+            import re
+
+            header_text = ""
+
+            def capture_textual_header(path, coding):
+                buffer = io.StringIO()
+                old_stdout = sys.stdout
+                sys.stdout = buffer
+                try:
+                    cigsegy.textual_header(path, coding=coding)
+                except Exception:
+                    pass
+                sys.stdout = old_stdout
+                return buffer.getvalue()
+
+            # Capture ASCII header
+            header_text += capture_textual_header(file_path, 'a')
+
+            # Capture EBCDIC header
+            header_text += capture_textual_header(file_path, 'e')
+
+            print("\n--- CAPTURED HEADER TEXT ---")
+            print(header_text)
+            
+            import segyio
+            # Open the file with segyio to get binary headers
+            with segyio.open(file_path, "r", ignore_geometry=True) as f:
+                print("\n--- BINARY HEADER ---")
+                
+                # segyio.bin[f] returns a dictionary-like object of all binary header fields
+                for field, value in f.bin.items():
+                    # Only print fields that have a non-zero value to keep it clean
+                    if value != 0:
+                        print(f"{field}: {value}")            
+            
+
+            header_clean = header_text.lower()
+
+            # Robust detection
+            if re.search(r"x[\s\-]?line", header_clean):
+                print(">>> DETECTED AS 3D CUBE")
+                is_cube = True
+            else:
+                print(">>> DETECTED AS 2D")
+                is_2d_segy = True
+
+
+        # ==========================================================
+        # Stage 3 — LOAD CUBE ONLY IF CONFIRMED
+        # ==========================================================
+        if is_cube:
             try:
-                img_raw = Image.open(file_path)
-                mode = img_raw.mode  # Check if it's RGB, L (grayscale), etc.
-
-                # RGB Logic
-                if mode == 'RGB':
-                    rgb_arr = np.asarray(img_raw, dtype=np.float32)
-                    R = rgb_arr[:, :, 0]
-                    B = rgb_arr[:, :, 2]
-                    
-                    arr = np.zeros(R.shape, dtype=np.float32)
-                    not_both_zero = (R != 0) | (B != 0)
-                    
-                    # This covers both your cases: 
-                    # If R > B, result is positive. If B > R, result is negative.
-                    arr[not_both_zero] = (R[not_both_zero] - B[not_both_zero]) * (R[not_both_zero] + B[not_both_zero]) / 2
-
-
-                # Grayscale Logic
-                else:
-                    img_l = img_raw.convert("L")
-                    gray_arr = np.asarray(img_l, dtype=np.float32)
-                    
-                    # If >= 127.5, keep positive value. If < 127.5, make it negative.
-                    arr = np.where(gray_arr >= 127.5, gray_arr, -gray_arr)
-
-
-                # Assign to your GUI attributes
-                self.image_full_relief = arr
-                self.seismic_profile_full_relief = arr
-                self.seismic_profile = arr.T  # Transposed for display
-                self.is_image = True
-
-                self.show_plot()
-                self.label.config(text=f"Loaded image: {os.path.basename(file_path)}")
-                return
-
+                d_cube = cigsegy.fromfile(file_path)
             except Exception as e:
-                self.label.config(text=f"Error loading file: {e}")
+                self.label.config(text=f"Error loading cube: {e}")
                 return
 
-        # ---------- Seismic slicing ----------
-        try:
+
+        # ==========================================================
+        # PROCESSING SECTION
+        # ==========================================================
+
+        if is_image_file:
+            
+            #arr = limit_resolution(arr)  # new  
+            self.image_full_relief = arr
+            self.seismic_profile_full_relief = arr
+            self.seismic_profile = arr.T
+            self.is_image = True
+            self.is_2d = False
+
+            self.show_plot()
+            self.label.config(text=f"Loaded image: {os.path.basename(file_path)}")
+
+
+        elif is_2d_segy:
+
+            import segyio
+
+            with segyio.open(file_path, "r", ignore_geometry=True) as f:
+                d = np.stack([f.trace[i] for i in range(f.tracecount)])
+
+            d = limit_resolution(d)  # new 
+            self.data = d
+            self.is_image = False
+            self.is_2d = True
+
+            seismic_relief = np.clip(self.relief_var.get(), 51, 100)
+            vm = np.percentile(d, seismic_relief)
+
+            self.seismic_profile_full_relief = d
+            self.seismic_profile = np.clip(d, -vm, vm)
+
+            self.show_plot()
+            self.label.config(text=f"Loaded 2D seismic: {os.path.basename(file_path)}")
+
+
+        elif is_cube:
+
+            self.data = d_cube
+            self.is_image = False
+            self.is_2d = False
+
             crossline_val = self.crossline_var.get()
             seismic_relief = np.clip(self.relief_var.get(), 51, 100)
 
             if crossline_val == 1:
-                slice_2d = d[:, self.inline, :]
+                slice_2d = d_cube[:, self.inline, :]
             else:
-                slice_2d = d[self.inline, :, :]
+                slice_2d = d_cube[self.inline, :, :]
 
-            self.seismic_profile_full_relief = slice_2d
             vm = np.percentile(slice_2d, seismic_relief)
+            
+            #slice_2d = limit_resolution(slice_2d)    # new
+            self.seismic_profile_full_relief = slice_2d
             self.seismic_profile = np.clip(slice_2d, -vm, vm)
 
             self.show_plot()
+            self.label.config(text=f"Loaded 3D cube: {os.path.basename(file_path)}")
 
-        except Exception as e:
-            self.label.config(text=f"Invalid inline number or read error: {e}")
 
+        else:
+            self.label.config(text="Unsupported file format.")
+            
+            
+            
+            
             
     def update_seismic_relief(self): # Thank God, .T is fixed
         if self.seismic_profile_full_relief is None:
@@ -1026,7 +1294,7 @@ class SeismicApp:
         try:
             vm = np.percentile(self.seismic_profile_full_relief, seismic_relief)
             self.seismic_profile = np.clip(
-                self.seismic_profile_full_relief.T, -vm, vm
+                self.seismic_profile_full_relief, -vm, vm
             )
             self.show_plot()
         except Exception as e:
@@ -1263,7 +1531,7 @@ def launch_second_gui(app):
 
     app.contour_root = tk.Toplevel(app.root)
     app.contour_root.title("Contour Detection")    
-    center_window(app.contour_root, 300, 400)                
+    center_window(app.contour_root, 300, 500)                
     frm = tk.Frame(app.contour_root)
     frm.pack(padx=10, pady=8)
 
@@ -1317,17 +1585,40 @@ def launch_second_gui(app):
     rb3_full.pack(side="left", padx=5)
     
     
-    # --- New Checkbox: Flood-fill Option ---
-    app.floodfill_option = tk.BooleanVar(value=True)
+    # --- Detection Mode Selection ---
+    app.detection_mode = tk.StringVar(value='both')
 
-    # Create the checkbutton
-    chk_flood = tk.Checkbutton(
-        app.contour_root, 
-        text="flood-fill option", 
-        variable=app.floodfill_option
+    frame_mode = tk.Frame(app.contour_root)
+    frame_mode.pack(pady=(10, 2))
+
+    lbl_mode = tk.Label(frame_mode, text="Detection Mode:")
+    lbl_mode.pack(anchor='w')
+
+    rb_both = tk.Radiobutton(
+        frame_mode,
+        text="Vertical polarity + Flood-fill",
+        variable=app.detection_mode,
+        value='both'
     )
-    chk_flood.pack(pady=(10, 2))    
-    
+    rb_both.pack(anchor='w')
+
+    rb_flood = tk.Radiobutton(
+        frame_mode,
+        text="Flood-fill only",
+        variable=app.detection_mode,
+        value='floodfill'
+    )
+    rb_flood.pack(anchor='w')
+
+    rb_vertical = tk.Radiobutton(
+        frame_mode,
+        text="Vertical polarity only",
+        variable=app.detection_mode,
+        value='vertical'
+    )
+    rb_vertical.pack(anchor='w')
+
+
     
     def run_contour_pipeline():
         # Parse inputs with validation
@@ -1372,37 +1663,46 @@ def launch_second_gui(app):
             
             length_limit = l_threshold * rescaling_constant                     
             mask_p, mask_n = get_positive_negative_masks(arr)
-            floodfill_option = app.floodfill_option.get()
+            mode = app.detection_mode.get()
 
 
-            def floodfill_verticalpolarity(arr, length_limit, floodfill_option=True, option='arr', layer_arr=None):
+            def floodfill_verticalpolarity(arr, length_limit, mode='both', option='arr', layer_arr=None):
                 if option=='arr':
-                    ### vertical polarity method
-                    compacted_image   = arrRB(arr)
-                    digofile_positive = digofile(compacted_image, negative_sign = False)
-                    digofile_negative = digofile(compacted_image, negative_sign = True)                
-                    stripe_coordinates_p = cv2_layers(digofile_positive)
-                    stripe_coordinates_n = cv2_layers(digofile_negative)
-                    stripe_coordinates = stripe_coordinates_p + stripe_coordinates_n
-                    # mask_n
-                    mask_p, mask_n = get_positive_negative_masks(arr)
-                    stripe_coordinates = filter_lines_by_length(stripe_coordinates, length_limit) 
-                    stripe_coordinates = split_lines_by_y(stripe_coordinates)                    
+                    stripe_coordinates = []
 
-                    if floodfill_option:
+                    if mode in ['both', 'vertical']:
+                        ### vertical polarity method
+                        compacted_image   = arrRB(arr)
+                        digofile_positive = digofile(compacted_image, negative_sign = False)
+                        digofile_negative = digofile(compacted_image, negative_sign = True)                
+                        stripe_coordinates_p = cv2_layers(digofile_positive)
+                        stripe_coordinates_n = cv2_layers(digofile_negative)
+                        stripe_coordinates_v = stripe_coordinates_p + stripe_coordinates_n
+
+                        # mask
+                        mask_p, mask_n = get_positive_negative_masks(arr)
+
+                        stripe_coordinates_v = filter_lines_by_length(stripe_coordinates_v, length_limit) 
+                        stripe_coordinates_v = split_lines_by_y(stripe_coordinates_v)
+
+                        stripe_coordinates += stripe_coordinates_v
+                    else:
+                        # still need mask_n for floodfill
+                        mask_p, mask_n = get_positive_negative_masks(arr)
+
+
+                    if mode in ['both', 'floodfill']:
                         ### flood-fill method
                         outlines_and_blobs = find_puddles_recursive(mask_n, connectivity=4)  
-                        stripe_coordinates_n = outlines_and_blobs
+                        stripe_coordinates_f = outlines_and_blobs
 
-                        stripe_coordinates_n = split_lines_by_y(stripe_coordinates_n)
-                        stripe_coordinates_n = integer_fitting(stripe_coordinates_n)
-                        stripe_coordinates_n = flip_layers(stripe_coordinates_n)
+                        stripe_coordinates_f = split_lines_by_y(stripe_coordinates_f)
+                        stripe_coordinates_f = integer_fitting(stripe_coordinates_f)
+                        stripe_coordinates_f = flip_layers(stripe_coordinates_f)
                         min_value = min(arr.shape[0], arr.shape[1])
-                        stripe_coordinates_n = filter_lines_by_length(
-                            stripe_coordinates_n, min(min_value, length_limit)
-                        )
-                        stripe_coordinates_n = remove_subset_lines(stripe_coordinates_n)
-                        
+                        stripe_coordinates_f = filter_lines_by_length(
+                            stripe_coordinates_f, min(min_value, length_limit)
+                        )                       
 
                         ## for paper
                         # extracting pure outlines and blobs
@@ -1416,43 +1716,56 @@ def launch_second_gui(app):
             #             np.savez("classic.npz", *np_data)   
             #             np_data = [np.array(line) for line in stripe_coordinates_n]
             #             np.savez("floodfill.npz", *np_data)   
-                        ##                     
-                        stripe_coordinates_n += stripe_coordinates           
-                    
-                elif option=='mask':  # manual mask
-                    ### vertical polarity method                
-                    compacted_image   = arrRB(arr)
-                    digofile_negative = digofile(compacted_image, negative_sign = True)                
-                    stripe_coordinates = cv2_layers(digofile_negative)
-                    # mask_n
-                    mask_n = arr
-                    stripe_coordinates = split_lines_by_y(stripe_coordinates)                    
+                        ##                                             
 
-                    if floodfill_option:
+                        stripe_coordinates += stripe_coordinates_f
+
+                    stripe_coordinates_n = stripe_coordinates
+
+
+                elif option=='mask':  # manual mask
+                    stripe_coordinates = []
+
+                    if mode in ['both', 'vertical']:
+                        ### vertical polarity method                
+                        compacted_image   = arrRB(arr)
+                        digofile_negative = digofile(compacted_image, negative_sign = True)                
+                        stripe_coordinates_v = cv2_layers(digofile_negative)
+
+                        stripe_coordinates_v = split_lines_by_y(stripe_coordinates_v)
+                        stripe_coordinates += stripe_coordinates_v
+
+                    # mask_n always needed for floodfill
+                    mask_n = arr
+
+                    if mode in ['both', 'floodfill']:
                         ### flood-fill method
                         outlines_and_blobs = find_puddles_recursive(mask_n, connectivity=4)  
-                        stripe_coordinates_n = outlines_and_blobs
+                        stripe_coordinates_f = outlines_and_blobs
 
-                        stripe_coordinates_n = split_lines_by_y(stripe_coordinates_n)
-                        stripe_coordinates_n = integer_fitting(stripe_coordinates_n)
-                        stripe_coordinates_n = flip_layers(stripe_coordinates_n)
-                        stripe_coordinates_n = remove_subset_lines(stripe_coordinates_n)
-                        
-                        stripe_coordinates_n += stripe_coordinates           
+                        stripe_coordinates_f = split_lines_by_y(stripe_coordinates_f)
+                        stripe_coordinates_f = integer_fitting(stripe_coordinates_f)
+                        stripe_coordinates_f = flip_layers(stripe_coordinates_f)
+                        #stripe_coordinates_f = remove_subset_lines(stripe_coordinates_f)
+
+                        stripe_coordinates += stripe_coordinates_f
+
+                    stripe_coordinates_n = stripe_coordinates
+
 
                 elif option=='layer':  # manual layer
                     # No contour detection, only polishing things up
-                    stripe_coordinates = arr # arr is actually stripe_coordinates type not an array                   
-                    stripe_coordinates = flip_layers(stripe_coordinates)  # flipping vertically for better plotting
-                    stripe_coordinates = sort_lines_by_x(stripe_coordinates)  # new; tricky little think I lost!
+                    stripe_coordinates = arr                   
+                    stripe_coordinates = flip_layers(stripe_coordinates)
+                    stripe_coordinates = sort_lines_by_x(stripe_coordinates)
                     stripe_coordinates = split_lines_by_x_trend(stripe_coordinates)
-                    stripe_coordinates = correct_lines_trend(stripe_coordinates)  # reverse any reversely incrementing layer
+                    stripe_coordinates = correct_lines_trend(stripe_coordinates)
                     stripe_coordinates = remove_duplicate_x_points(stripe_coordinates)
                     stripe_coordinates = bresenham_line(stripe_coordinates)
                     stripe_coordinates = filter_lines_by_length(stripe_coordinates, length_limit) 
-                    stripe_coordinates_n = split_lines_by_y(stripe_coordinates)                    
+                    stripe_coordinates_n = split_lines_by_y(stripe_coordinates)
 
-                return stripe_coordinates_n
+                return stripe_coordinates_n                
 
 
             ## debug~
@@ -1480,7 +1793,7 @@ def launch_second_gui(app):
             
             if  use_mask3 == 0:
                 
-                stripe_coordinates_n = floodfill_verticalpolarity(arr, length_limit, floodfill_option=floodfill_option, option='arr')
+                stripe_coordinates_n = floodfill_verticalpolarity(arr, length_limit, mode=mode, option='arr')
             
             try:
                 if use_mask == 0:
@@ -1501,7 +1814,7 @@ def launch_second_gui(app):
                     if use_mask2 == 1:  # Masks
                         data_npz = np.load("masks.npz")
                         mask = data_npz["masks"] 
-                        stripe_coordinates = floodfill_verticalpolarity(mask, length_limit, floodfill_option=floodfill_option, option='mask')
+                        stripe_coordinates = floodfill_verticalpolarity(mask, length_limit, mode=mode, option='mask')
                         
                     elif use_mask2 == 0:  # Layers
                         np_data = np.load("layers.npz") 
@@ -1523,7 +1836,7 @@ def launch_second_gui(app):
                     if use_mask2 == 1:  # Masks
                         data_npz = np.load("masks.npz")
                         mask = data_npz["masks"] 
-                        stripe_coordinates = floodfill_verticalpolarity(mask, length_limit, floodfill_option=floodfill_option, option='mask')
+                        stripe_coordinates = floodfill_verticalpolarity(mask, length_limit, mode=mode, option='mask')
                         
                     elif use_mask2 == 0:  # Layers
                         np_data = np.load("layers.npz") 
@@ -1549,7 +1862,7 @@ def launch_second_gui(app):
                     if use_mask2 == 1:  # Masks
                         data_npz = np.load("masks.npz")
                         mask = data_npz["masks"] 
-                        stripe_coordinates = floodfill_verticalpolarity(mask, length_limit, floodfill_option=floodfill_option, option='mask')
+                        stripe_coordinates = floodfill_verticalpolarity(mask, length_limit, mode=mode, option='mask')
                         
                     elif use_mask2 == 0:  # Layers
                         np_data = np.load("layers.npz") 
