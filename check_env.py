@@ -14,7 +14,8 @@ REQUIRED_PACKAGES = [
     "skimage",
     "shapely",
     "IPython",
-    "cigsegy"
+    "cigsegy",
+    "segyio"
     #"TkinterDnD2",
 ]
 
