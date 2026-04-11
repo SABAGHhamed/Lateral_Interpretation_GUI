@@ -47,20 +47,29 @@ https://github.com/equinor/segyio-notebooks/tree/master/data/basic
 The limited spatial extent of the sample data makes it overly simplified for demonstrating
 the full capabilities of the Lateral Interpretation method. Please use F3 raw dataset for an extensive test.
 
-
 ## Third-Party Libraries
 
-This software relies on external open-source libraries. In particular, SEG-Y
-file reading is handled using the **CIGSEGY** library:
+This software relies on external open-source libraries for handling SEG-Y seismic data.
 
-Li, J., *CIGSEGY: A tool for exchanging data between SEG-Y format and NumPy array
-inside Python environment*.
+### CIGSEGY (Primary)
 
-Project URL:
-https://github.com/JintaoLee-Roger/cigsegy
+Li, J., *CIGSEGY: A tool for exchanging data between SEG-Y format and NumPy array inside Python environment.*
 
-Documentation:
-https://cigsegy.readthedocs.io/en/latest/
+Project URL: [https://github.com/JintaoLee-Roger/cigsegy](https://github.com/JintaoLee-Roger/cigsegy)
+
+Documentation: [https://cigsegy.readthedocs.io/en/latest/](https://cigsegy.readthedocs.io/en/latest/)
+
+CIGSEGY is used as the default library for loading seismic data due to its speed and convenience when working with standard seismic cubes.
+
+### segyio (Fallback / Specialized Use)
+
+Segyio is a small LGPL-licensed C library with Python bindings designed for interacting with SEG-Y formatted seismic data, providing low-level access to traces, headers, and file structure.
+
+Project URL: [https://github.com/equinor/segyio](https://github.com/equinor/segyio)
+
+Documentation: [https://segyio.readthedocs.io](https://segyio.readthedocs.io)
+
+In this project, segyio is used only in rare cases where SEG-Y files represent 2D seismic images rather than standard volumetric data. While more technical and lower-level, it provides the flexibility required for handling such edge cases where the default CIGSEGY workflow is insufficient.
 
 
 ## Quick Start
