@@ -56,14 +56,48 @@ class SeismicApp:
         center_window(self.root, 700, 700)
 
         # ============================================================
-        # TOP STATUS LABEL
+        # INTERACTIVE BOUNDING BOX ENTRIES (REPLACES TOP STATUS LABEL)
         # ============================================================
-        self.label = ttk.Label(
-            root,
-            text="Enter the file name (in the main directory) or click “Browse”"
-        )
-        self.label.pack(padx=10, pady=10)
+        range_frame = ttk.LabelFrame(root, text=" Selected Region Coordinates (Editable) ")
+        range_frame.pack(padx=10, pady=10, fill="x")
+        
+        # Configure grid weights for even spacing
+        for i in range(8):
+            range_frame.columnconfigure(i, weight=1)
 
+        # X1 Control
+        ttk.Label(range_frame, text="X1 (Min):").grid(row=0, column=0, padx=2, pady=5, sticky=tk.E)
+        self.x1_var = tk.DoubleVar(value=0.0)
+        self.x1_entry = ttk.Entry(range_frame, textvariable=self.x1_var, width=10)
+        self.x1_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        
+        # X2 Control
+        ttk.Label(range_frame, text="X2 (Max):").grid(row=0, column=2, padx=2, pady=5, sticky=tk.E)
+        self.x2_var = tk.DoubleVar(value=0.0)
+        self.x2_entry = ttk.Entry(range_frame, textvariable=self.x2_var, width=10)
+        self.x2_entry.grid(row=0, column=3, padx=5, pady=5, sticky=tk.W)
+
+        # Y1 Control
+        ttk.Label(range_frame, text="Y1 (Min):").grid(row=0, column=4, padx=2, pady=5, sticky=tk.E)
+        self.y1_var = tk.DoubleVar(value=0.0)
+        self.y1_entry = ttk.Entry(range_frame, textvariable=self.y1_var, width=10)
+        self.y1_entry.grid(row=0, column=5, padx=5, pady=5, sticky=tk.W)
+
+        # Y2 Control
+        ttk.Label(range_frame, text="Y2 (Max):").grid(row=0, column=6, padx=2, pady=5, sticky=tk.E)
+        self.y2_var = tk.DoubleVar(value=0.0)
+        self.y2_entry = ttk.Entry(range_frame, textvariable=self.y2_var, width=10)
+        self.y2_entry.grid(row=0, column=7, padx=5, pady=5, sticky=tk.W)
+
+        # Bind all entries to update the canvas selector instantly on Enter key or Focus Loss
+        for entry in (self.x1_entry, self.x2_entry, self.y1_entry, self.y2_entry):
+            entry.bind("<Return>", lambda e: self.update_selector_from_entries())
+            entry.bind("<FocusOut>", lambda e: self.update_selector_from_entries())
+            
+        # Stub container to avoid breaking references to self.label elsewhere in your script
+        self.label = ttk.Label(root, text="", foreground="red")
+        self.label.pack(pady=(0, 2))
+        
         # ============================================================
         # ENTRY + BROWSE
         # ============================================================
@@ -1338,31 +1372,101 @@ class SeismicApp:
         )
 
     def on_select(self, eclick, erelease):
-        # Note: RectangleSelector returns coordinates in the plotted image coordinate system
-        y1 = int(eclick.ydata)
-        y2 = int(erelease.ydata)
-        x1 = int(eclick.xdata)
-        x2 = int(erelease.xdata)
-        self.selector_coords_y = (min(y1, y2), max(y1, y2))
-        self.selector_coords_x = (min(x1, x2), max(x1, x2))
-        self.ok_button.config(state=tk.NORMAL)
+        # Coordinates in the plotted image matrix coordinate system
+        y1_raw = int(eclick.ydata)
+        y2_raw = int(erelease.ydata)
+        x1_raw = int(eclick.xdata)
+        x2_raw = int(erelease.xdata)
+        
+        # Sort them to guarantee logic calculations read min/max perfectly
+        xmin, xmax = min(x1_raw, x2_raw), max(x1_raw, x2_raw)
+        ymin, ymax = min(y1_raw, y2_raw), max(y1_raw, y2_raw)
+
+        # Apply user conversions (scaling and zero shifts)
         x_start = self.x_start_var.get()
         y_start = self.y_start_var.get()
-        
-        
         twt_spacing = float(self.rescaling_constant_var.get())
-        presented_range_y = (
-            y_start + (self.selector_coords_y[0])*twt_spacing,
-            y_start + (self.selector_coords_y[1])*twt_spacing
-        )
-        presented_range_x = (
-            self.selector_coords_x[0] + x_start,
-            self.selector_coords_x[1] + x_start
-        )        
 
-        #messagebox.showinfo("Saved", f"{self.selector_coords_x},{x_start}")
-        self.label.config(text=f"Y-range: {presented_range_y}, X-range: {presented_range_x}")
+        x1_scaled = xmin + x_start
+        x2_scaled = xmax + x_start
+        y1_scaled = y_start + (ymin * twt_spacing)
+        y2_scaled = y_start + (ymax * twt_spacing)
 
+        # Enforce Delta Rule Check (X2 > X1 and Y2 > Y1)
+        if x2_scaled <= x1_scaled or y2_scaled <= y1_scaled:
+            self.clear_selection("Invalid dimensions! Ensure X2 > X1 and Y2 > Y1.")
+            return
+
+        # Save internal processing values
+        self.selector_coords_x = (xmin, xmax)
+        self.selector_coords_y = (ymin, ymax)
+        self.ok_button.config(state=tk.NORMAL)
+        self.label.config(text="") # Clear warning messages
+
+        # Update editable numeric entries dynamically with rounded user-space calculations
+        self.x1_var.set(round(x1_scaled, 2))
+        self.x2_var.set(round(x2_scaled, 2))
+        self.y1_var.set(round(y1_scaled, 2))
+        self.y2_var.set(round(y2_scaled, 2))
+
+    def update_selector_from_entries(self):
+        """Triggered when the user manually modifies any X1, X2, Y1, Y2 field values"""
+        if not hasattr(self, 'selector') or self.selector is None:
+            return
+            
+        try:
+            # Fetch human-entered values from UI input cells
+            x1_val = self.x1_var.get()
+            x2_val = self.x2_var.get()
+            y1_val = self.y1_var.get()
+            y2_val = self.y2_var.get()
+
+            # Dynamic Rule Validation Check
+            if x2_val <= x1_val or y2_val <= y1_val:
+                self.clear_selection("Invalid entry ranges! Must follow rule: X2 > X1 and Y2 > Y1.")
+                return
+
+            # Extract scaling adjustments
+            x_start = self.x_start_var.get()
+            y_start = self.y_start_var.get()
+            twt_spacing = float(self.rescaling_constant_var.get())
+
+            # Reverse-engineer scaling calculation back down into native matrix pixels
+            x1_raw = int(x1_val - x_start)
+            x2_raw = int(x2_val - x_start)
+            y1_raw = int((y1_val - y_start) / twt_spacing)
+            y2_raw = int((y2_val - y_start) / twt_spacing)
+
+            # Assign valid array coordinate values back to application parameters
+            self.selector_coords_x = (x1_raw, x2_raw)
+            self.selector_coords_y = (y1_raw, y2_raw)
+            
+            # Reposition graphic visual representation on canvas matrix display
+            self.selector.extents = (x1_raw, x2_raw, y1_raw, y2_raw)
+            self.selector.set_visible(True)
+            self.canvas_widget.draw_idle()
+            self.ok_button.config(state=tk.NORMAL)
+            self.label.config(text="") # Clear errors
+
+        except ValueError:
+            self.clear_selection("Invalid text numbers entered.")
+
+    def clear_selection(self, error_msg=""):
+        """Helper to safely empty values when eligibility conditions are violated"""
+        self.selector_coords_x = None
+        self.selector_coords_y = None
+        self.x1_var.set(0.0)
+        self.x2_var.set(0.0)
+        self.y1_var.set(0.0)
+        self.y2_var.set(0.0)
+        if hasattr(self, 'selector') and self.selector:
+            self.selector.set_visible(False)
+        if self.canvas_widget:
+            self.canvas_widget.draw_idle()
+        self.ok_button.config(state=tk.DISABLED)
+        self.label.config(text=error_msg)
+
+ 
     def finalize_selection(self):
         if not self.selector_coords_y or not self.selector_coords_x:
             self.label.config(text="Please select a region first.")
