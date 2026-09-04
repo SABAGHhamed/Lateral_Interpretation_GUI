@@ -3,7 +3,7 @@
 This repository contains the Python source code for the **Lateral Interpretation (LI)**
 method described in:
 
-> Sabagh, H., Naruse, H., *Lateral Interpretation: A New Method for High Resolution Seismic Stratigraphy*, The Leading Edge (under review).
+> Sabagh, H., Naruse, H., *Lateral Interpretation: A New Method for High Resolution Seismic Stratigraphy*, The Leading Edge (https://doi.org/10.1190/tle-2026-1078).
 
 ## Requirements
 - Python ≥ 3.8
