@@ -811,7 +811,7 @@ class SeismicApp:
                 "Hamed Sabagh\n"
                 "Department of Geology and Mineralogy\n"
                 "Kyoto University, Japan\n"
-                "Email: sabagh.hamed.57f@st.kyoto-u.ac.jp\n"
+                "Email: sabagh.hamed.6v@kyoto-u.ac.jp\n"
                 "GitHub: https://github.com/SABAGHhamed"
             ),
 
