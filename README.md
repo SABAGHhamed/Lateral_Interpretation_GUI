@@ -1,5 +1,4 @@
 # Lateral Interpretation GUI
-# Lateral Interpretation (LI)
 
 This repository contains the official Python implementation and source code for the **Lateral Interpretation (LI)** method, a GUI tool for high-resolution seismic stratigraphy.
 
