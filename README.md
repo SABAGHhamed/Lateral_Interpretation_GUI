@@ -9,16 +9,7 @@ If you use this software or method in your research, please cite our paper:
 
 > Sabagh, H., & Naruse, H. (2026). Lateral Interpretation: A New Method for High Resolution Seismic Stratigraphy. *The Leading Edge*. https://doi.org/10.1190/tle-2026-1078
 
-```bibtex
-@article{sabagh2026lateral,
-  title={Lateral Interpretation: A New Method for High Resolution Seismic Stratigraphy},
-  author={Sabagh, Hamed and Naruse, Hajime},
-  journal={The Leading Edge},
-  year={2026},
-  doi={10.1190/tle-2026-1078},
-  url={[https://doi.org/10.1190/tle-2026-1078](https://doi.org/10.1190/tle-2026-1078)}
-}
-```
+
 ## Requirements
 - Python ≥ 3.8
 - Windows / Linux / macOS
