@@ -3789,209 +3789,308 @@ def plot_layers(
     marked_layers=False,
     axis_off=True,
     close_option=False,
-    fixed_name=None,
-    inline=-999,
+    fixed_name="layers_plot",
+    inline=None,
     initial_inline=0,
     crossline=0,
-    fs=[14, 12, 11],
-    line_color='red',
+    fs=[14, 12, 11],  # [title fontsize, axis fontsize, tick fontsize]
     x_start=0,
     y_start=0,
     twt_spacing=4,
-    seismic_profile_shape=(950, 460),
+    seismic_profile_shape=(950, 460),  # F3 inline dimension
+    seismic_profile=None,
+    alpha=0.7,
+    seismic_relief=99,
+    color='black',
+    mcolor='red',
+    line_color=None,   # if given, overrides mcolor for marked layers
     return_fig=False,
+    return_option=False,
     svg_option=False
 ):
 
-    # ---------------------------
-    # Normalize inputs
-    # ---------------------------
+    # ==========================================
+    # 1. Global Style Configuration
+    # ==========================================
+    for k, v in {
+        "axes.titlesize": fs[0],
+        "axes.labelsize": fs[1],
+        "xtick.labelsize": fs[2],
+        "ytick.labelsize": fs[2],
+    }.items():
+        try:
+            plt.rcParams[k] = v
+        except Exception:
+            print(f"⚠️ Skipped invalid rcParam: {k}")
+
+    # line_color (if provided) takes precedence over mcolor
+    marked_color = line_color if line_color is not None else mcolor
+
+    # inline=-999 is treated the same as "no inline given"
+    if inline == -999:
+        inline = None
+
+    # Normalize input to list of layers
     if isinstance(layers[0], tuple):
         layers = [layers]
 
-    if marked_layers:
-        if isinstance(marked_layers[0], tuple):
-            marked_layers = [marked_layers]
+    if marked_layers and isinstance(marked_layers[0], tuple):
+        marked_layers = [marked_layers]
 
     dpi = 100
 
     if isinstance(pixels, int):
         width_px, height_px = pixels, pixels
-    else:
+    elif isinstance(pixels, (tuple, list)) and len(pixels) == 2:
         width_px, height_px = pixels
+    else:
+        raise ValueError("pixels must be int or tuple/list of (width, height)")
 
-    fig, ax = plt.subplots(figsize=(width_px / dpi, height_px / dpi), dpi=dpi)
+    # Create figure
+    fig, ax = plt.subplots(figsize=(width_px / 100, height_px / 100), dpi=dpi)
 
-    # ============================================================
-    # AXIS OFF  (image-like coordinates)
-    # ============================================================
+    # axis / ticks
     if axis_off:
         ax.axis('off')
         plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
-        def process_layer(layer):
-            pts = list(set(layer))
-            return sorted(pts, key=lambda p: p[0])
-
-        all_x, all_y = [], []
-
-        # regular layers
-        for layer in layers:
-            cl = process_layer(layer)
-            if cl:
-                x = [p[0] for p in cl]
-                y = [p[1] for p in cl]
-                all_x.extend(x)
-                all_y.extend(y)
-                ax.plot(x, y, c='black', linewidth=1)
-
-        # marked layers
-        if marked_layers:
-            for layer in marked_layers:
-                cl = process_layer(layer)
-                if cl:
-                    x = [p[0] for p in cl]
-                    y = [p[1] for p in cl]
-                    all_x.extend(x)
-                    all_y.extend(y)
-                    ax.plot(x, y, c=line_color, linewidth=2)
-
-        if all_x and all_y:
-            ax.set_xlim(min(all_x), max(all_x))
-            ax.set_ylim(min(all_y), max(all_y))
-
-    # ============================================================
-    # AXIS ON  (physical seismic coordinates)
-    # ============================================================
-    else:
-        # seismic geometry
-        n_traces, n_samples = seismic_profile_shape
-        twt_height = n_samples * twt_spacing
-        x_end = x_start + n_traces
-        y_end = y_start + twt_height
-
-        # debug
-        print(*(f"{name}: {val}" for name, val in [("x_start", x_start), ("y_start", y_start), ("twt_spacing", twt_spacing), ("n_traces", n_traces), ("n_samples", n_samples), ("twt_height", n_samples * twt_spacing), ("x_end", x_start + n_traces), ("y_end", y_start + n_samples * twt_spacing)]))
-
-        # --------------------------------------------------------
-        # SCALE BOTH layers AND marked_layers IDENTICALLY
-        # --------------------------------------------------------
-        scaled_layers = rescale_lines_to_image(
-            layers,
-            dimensions=(x_end - x_start, y_end - y_start),
-            offset=(x_start, y_start)
-        )
-
-        scaled_marked = None
-        if marked_layers:
-            scaled_marked = rescale_lines_to_image(
-                marked_layers,
-                dimensions=(x_end - x_start, y_end - y_start),
-                offset=(x_start, y_start)
+        # --- Plot seismic background if available (AXIS OFF) ---
+        if seismic_profile is not None:
+            clipped_relief = np.clip(seismic_relief, 51, 100)
+            vm = np.percentile(seismic_profile, clipped_relief)
+            ax.imshow(
+                seismic_profile.T,
+                cmap="RdBu",
+                vmin=-vm,
+                vmax=vm,
+                aspect='auto',
+                extent=[0, width_px, 0, height_px],
+                origin='upper',
+                alpha=alpha
             )
 
-        # ensure list-of-lists
-        if isinstance(scaled_layers[0], tuple):
-            scaled_layers = [scaled_layers]
-        if scaled_marked and isinstance(scaled_marked[0], tuple):
-            scaled_marked = [scaled_marked]
-
-        # --------------------------------------------------------
-        # Apply SAME coordinate transforms to both
-        # --------------------------------------------------------
-        
-        #### transform and flipping was unncessary when y_start and y_end is in plotting and offset added in rescaling
-        # def transform(lines):
-            # out = []
-            # max_y = max(y for ln in lines for _, y in ln)
-
-            # for ln in lines:
-                # tmp = [(x, max_y - y) for x, y in ln]   # removed  + x_start and  + y_start
-                # out.append(tmp)
-
-            # out = flip_layers(out)
-            # return out 
-
-        sample_point = scaled_layers[0][0]
-        #x,samp, y_samp = sample_point
-        print("sample_point:", sample_point)
-
-        #scaled_layers = transform(scaled_layers)
-        
-        
-        #if scaled_marked:
-            #scaled_marked = transform(scaled_marked)
-            
-        sample_point = scaled_layers[0][0]
-        #x,samp, y_samp = sample_point
-        print("sample_point after flipping:", sample_point)            
-            
+        # Helper to clean and sort points by x
         def process_layer(layer):
-            pts = list(set(layer))
-            return sorted(pts, key=lambda p: p[0])            
+            unique_pts = list(set(layer))
+            return sorted(unique_pts, key=lambda pt: pt[0])
 
-        all_x, all_y = [], []
+        all_x_coords = []
+        all_y_coords = []
 
-        # plot regular layers
-        for layer in scaled_layers:
-            cl = process_layer(layer)
-            if cl:
-                x = [p[0] for p in cl]
-                y = [p[1] for p in cl]
-            all_x.extend(x)
-            all_y.extend(y)
-            ax.plot(x, y, c='black', linewidth=1)
+        # Plot regular layers in black
+        for layer in layers:
+            cleaned = process_layer(layer)
+            if cleaned:
+                x = [pt[0] for pt in cleaned]
+                y = [pt[1] for pt in cleaned]
+                all_x_coords.extend(x)
+                all_y_coords.extend(y)
+                ax.plot(x, y, c='black', linewidth=1)
 
-        # plot marked layers (NOW CORRECTLY SCALED)
-        if scaled_marked:
-            for layer in scaled_marked:
-                cl = process_layer(layer)
-                if cl:
-                    x = [p[0] for p in cl]
-                    y = [p[1] for p in cl]
-                all_x.extend(x)
-                all_y.extend(y)
-                ax.plot(x, y, c=line_color, linewidth=2)
+        # Plot marked layers on top
+        if marked_layers:
+            for layer in marked_layers:
+                cleaned = process_layer(layer)
+                if cleaned:
+                    x = [pt[0] for pt in cleaned]
+                    y = [pt[1] for pt in cleaned]
+                    all_x_coords.extend(x)
+                    all_y_coords.extend(y)
+                    ax.plot(x, y, c=marked_color, linewidth=2)
 
-        # labels & title
-        ax.set_xlabel("CDP number", fontsize=fs[1])
-        ax.set_ylabel("TWT [ms]", fontsize=fs[1])
+        # Set limits based on all points
+        if all_x_coords and all_y_coords:
+            ax.set_xlim(min(all_x_coords), max(all_x_coords))
+            ax.set_ylim(min(all_y_coords), max(all_y_coords))
 
-        inline_plot = inline + initial_inline
-        if crossline == 0:
-            ax.set_title(f"{fixed_name} inline = {inline_plot}", fontsize=fs[0])
+    else:
+        # --- Handle spatial dimensions dynamically based on profile (AXIS ON) ---
+        if seismic_profile is not None:
+            n_traces, n_samples = seismic_profile.shape
         else:
-            ax.set_title(f"{fixed_name} crossline = {inline_plot}", fontsize=fs[0])
+            n_traces, n_samples = seismic_profile_shape
 
-        # y ticks
-        num_ticks = int(width_px / 85)
-        twt_ticks = np.linspace(y_start, y_end, num_ticks)
-        ax.set_yticks(twt_ticks)
-        ax.set_yticklabels(list(reversed([f"{int(v)}" for v in twt_ticks])))
+        twt_height = n_samples * twt_spacing   # ms covered by this crop
+        x_end = x_start + n_traces
+        y_end = y_start + twt_height
+        print("CDP:", n_traces, "twt samples:", n_samples, "x_start:", x_start, "y_start:", y_start)
 
-        if all_x and all_y:
-            ax.set_xlim(min(all_x), max(all_x))
-            ax.set_ylim(min(all_y), max(all_y))
+        # --- Plot seismic background if available (AXIS ON) ---
+        if seismic_profile is not None:
+            clipped_relief = np.clip(seismic_relief, 51, 100)
+            vm = np.percentile(seismic_profile, clipped_relief)
+            ax.imshow(
+                seismic_profile.T,
+                cmap="RdBu",
+                vmin=-vm,
+                vmax=vm,
+                aspect='auto',
+                extent=[x_start, x_end, y_start, y_end],
+                origin='upper',
+                alpha=alpha
+            )
 
-    # ============================================================
-    # SAVE / RETURN
-    # ============================================================
-    if save_option:
-        if inline:
-            tag = "inline" if crossline == 0 else "crossline"
+        if isinstance(layers[0], tuple):  # Handle single line input shape
+            layers = [layers]
+
+        # Target pixel dimensions for rescaling (width, height)
+        target_w = int(x_end - x_start)
+        target_h = int(y_end - y_start)
+
+        # --- Helper: compute bbox of a list-of-lines ---
+        def bbox_of_lines(lines):
+            xs = []
+            ys = []
+            for line in lines:
+                if not line:
+                    continue
+                for (x, y) in line:
+                    xs.append(x)
+                    ys.append(y)
+            if not xs:
+                return None
+            return (min(xs), max(xs), min(ys), max(ys))
+
+        # --- Helper: scale lines to target dims using REF bbox ---
+        def scale_lines_using_ref(lines, ref_bbox, dims):
+            if ref_bbox is None:
+                return rescale_lines_to_image(lines, dims)
+            min_x, max_x, min_y, max_y = ref_bbox
+            w, h = dims
+            scaled = []
+            dx = (max_x - min_x) if (max_x - min_x) != 0 else 1.0
+            dy = (max_y - min_y) if (max_y - min_y) != 0 else 1.0
+            for line in lines:
+                if not line:
+                    scaled.append([])
+                    continue
+                pts = []
+                for (x, y) in line:
+                    sx = ((x - min_x) / dx) * (w - 1) if w > 1 else 0.0
+                    sy = ((y - min_y) / dy) * (h - 1) if h > 1 else 0.0
+                    pts.append((sx, sy))
+                scaled.append(pts)
+            return scaled
+
+        # Compute bbox from MAIN layers ONLY
+        main_bbox = bbox_of_lines(layers)
+
+        # Scale main layers
+        scaled_main = scale_lines_using_ref(layers, main_bbox, (target_w, target_h))
+
+        # Scale marked layers
+        marked_scaled = None
+        if marked_layers:
+            marked_scaled = scale_lines_using_ref(marked_layers, main_bbox, (target_w, target_h))
+
+        if not scaled_main or not any(scaled_main):
+            max_y = float(target_h)
+        else:
+            max_y = max(y for line in scaled_main for x, y in line)
+
+        transformed_main = []
+        all_x_coords = []
+        all_y_coords = []
+
+        for line in scaled_main:
+            if not line:
+                transformed_main.append([])
+                continue
+            pts = []
+            for (sx, sy) in line:
+                x_plot = sx + x_start
+                y_plot = (max_y - sy) + y_start
+                pts.append((x_plot, y_plot))
+                all_x_coords.append(x_plot)
+                all_y_coords.append(y_plot)
+            transformed_main.append(pts)
+
+        transformed_marked = None
+        if marked_scaled:
+            transformed_marked = []
+            for line in marked_scaled:
+                if not line:
+                    transformed_marked.append([])
+                    continue
+                pts = []
+                for (sx, sy) in line:
+                    x_plot = sx + x_start
+                    y_plot = (max_y - sy) + y_start
+                    pts.append((x_plot, y_plot))
+                transformed_marked.append(pts)
+
+        transformed_main = flip_layers(transformed_main)
+        if transformed_marked:
+            transformed_marked = flip_layers(transformed_marked)
+
+        if transformed_main and isinstance(transformed_main[0], tuple):
+            transformed_main = [transformed_main]
+
+        # Plot main layers
+        for layer in transformed_main:
+            if not layer:
+                continue
+            x = [pt[0] for pt in layer]
+            y = [pt[1] for pt in layer]
+            y = np.array([p[1] for p in layer])
+            ax.plot(x, y + y_start, c=color, linewidth=1)
+
+        # Plot marked layers
+        if transformed_marked:
+            for mline in transformed_marked:
+                if not mline:
+                    continue
+                mx = [pt[0] for pt in mline]
+                my = [pt[1] for pt in mline]
+                my = np.array([p[1] for p in mline])
+                ax.plot(mx, my + y_start, c=marked_color, linewidth=2)
+
+        # Labels / title
+        ax.set_xlabel('CDP number', fontsize=fs[1])
+        ax.set_ylabel('TWT [ms]', fontsize=fs[1])
+        if inline is not None:
             inline_plot = inline + initial_inline
-            filename = f"layers_plot_{tag}_{inline_plot}.png"
-        else:
-            filename = f"layers_plot_{generate_code(all_x)}.png"
+            if crossline == 0:
+                ax.set_title(f"{fixed_name} inline = {inline_plot}", fontsize=fs[0])
+            else:
+                ax.set_title(f"{fixed_name} crossline = {inline_plot}", fontsize=fs[0])
 
-        fig.savefig(filename, bbox_inches='tight', pad_inches=0, dpi=dpi)
-        base = find_base(filename)
+        # TWT ticks
+        num_ticks = int(width_px/100) + 1
+        twt_ticks = np.linspace(y_start, y_end, num_ticks, dtype=int)
+        ax.set_yticks(twt_ticks)
+        ax.tick_params(axis='y', labelsize=fs[2])
+        ax.tick_params(axis='x', labelsize=fs[2])
+        twt_labels = [f"{int(v)}" for v in twt_ticks]
+        ax.set_yticklabels(list(reversed(twt_labels)))
+
+        # Set limits based ONLY on transformed MAIN-layer points
+        if all_x_coords and all_y_coords:
+            ax.set_xlim(min(all_x_coords), max(all_x_coords))
+            ax.set_ylim(min(all_y_coords), max(all_y_coords))
+
+    # Save option
+    if save_option:
+        if inline is not None:
+            inline_plot = inline + initial_inline
+            filename = f"{fixed_name}_{inline_plot}.png"
+        else:
+            code = generate_code(all_y_coords)
+            filename = f"{fixed_name}_{code}.png"
+
+        plt.savefig(f"{filename}", bbox_inches='tight', pad_inches=0, dpi=dpi)
         if svg_option:
-            fig.savefig(base + ".svg", bbox_inches='tight', pad_inches=0, dpi=dpi)
+            base = find_base(filename)
+            fig.savefig(base + ".svg", dpi=dpi, bbox_inches='tight', pad_inches=0)
+
+    # interrupt show if return is on
+    if return_option:
+        return fig, ax
 
     if return_fig:
         return fig
 
+    # Only show if close_option is False
     if not close_option:
         plt.show()
 
