@@ -22,6 +22,9 @@ from skimage.filters.rank import entropy
 from skimage.morphology import disk
 from skimage.util import img_as_ubyte
 import sys
+import math
+from scipy.ndimage import gaussian_filter
+from scipy.signal import convolve2d
  
 
    
@@ -43,6 +46,7 @@ class SeismicApp:
         self.initial_inline = None
         self.selection_finalized = False
         self.is_image = False  # for 2D image imports not 3D SEG=Y files
+        self.original_seismic_shape = None
         # ============================================================
         # Canvas placeholder
         # ============================================================
@@ -287,6 +291,44 @@ class SeismicApp:
             self.dev_frame, text="Feature Extraction",
             command=self.skip_to_feature_processing
         ).grid(row=0, column=4, padx=4, pady=3)
+        
+        # =====================
+        # Downscale & Anti-Aliasing State
+        # =====================
+        self.downscale_method_var = tk.StringVar(value="Gaussian Anti-Aliased")
+        self.max_res_h_var = tk.IntVar(value=291)
+        self.max_res_w_var = tk.IntVar(value=1250)
+
+        # ============================================================
+        # DOWNSCALING & RESOLUTION PANEL
+        # ============================================================
+        downscale_frame = ttk.LabelFrame(root, text=" Resolution Reduction & Anti-Aliasing Settings ")
+        downscale_frame.pack(padx=10, pady=5, fill="x")
+
+        ttk.Label(downscale_frame, text="Method:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        self.downscale_combo = ttk.Combobox(
+            downscale_frame,
+            textvariable=self.downscale_method_var,
+            values=[
+                "Standard Stride",
+                "Sign-Frequency + Max-Amp",
+                "Gaussian Anti-Aliased",
+                "Convolution Anti-Aliased"
+            ],
+            state="readonly",
+            width=24
+        )
+        self.downscale_combo.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+
+        ttk.Label(downscale_frame, text="Max Res (H × W):").grid(row=0, column=2, padx=10, pady=5, sticky=tk.W)
+        
+        self.max_res_h_entry = ttk.Entry(downscale_frame, textvariable=self.max_res_h_var, width=6)
+        self.max_res_h_entry.grid(row=0, column=3, padx=2, pady=5)
+        
+        ttk.Label(downscale_frame, text="×").grid(row=0, column=4, padx=0, pady=5)
+        
+        self.max_res_w_entry = ttk.Entry(downscale_frame, textvariable=self.max_res_w_var, width=6)
+        self.max_res_w_entry.grid(row=0, column=5, padx=2, pady=5)        
 
         
     # === Help menu ===    
@@ -804,6 +846,7 @@ class SeismicApp:
         container = tk.Frame(credit_tab, bg=bg)
         container.pack(fill=tk.BOTH, expand=True, padx=12, pady=5)
 
+        
         credit_items = [
 
             (
@@ -888,7 +931,6 @@ class SeismicApp:
             index_attr_name="page_index",
             bg="white"
         )
-
 
 
 
@@ -990,116 +1032,16 @@ class SeismicApp:
 
 
         ######################################################
-        ### needed for data with very high resolution (old method, causes small rigged places)
-        # def limit_resolution(arr, max_res=(291, 1250)):
-            # """
-            # Downsample 2D seismic/image array if its resolution exceeds max_res.
-            # max_res is defined as (TWT, CDP).
-            # """
 
-            # if arr is None or arr.ndim != 2:
-                # return arr
-
-            # h, w = arr.shape
-
-            # max_diag = math.sqrt(max_res[0]**2 + max_res[1]**2)
-            # current_diag = math.sqrt(h**2 + w**2)
-
-            # if current_diag <= max_diag:
-                # return arr
-
-            # scale = current_diag / max_diag
-            # step = int(np.ceil(scale))  # making the scale integer in ceiling way
-
-            # return arr[::step, ::step]  # smart way to implement multiplication factor (scale)  as skipping factor in integrations
-            
-
-
-        
-        # def limit_resolution(arr, max_res=(291, 1250), horizontal_bias=0.0):
-            # """
-            # Downsample 2D array using sign-frequency + max-amplitude logic,
-            # with directional (anisotropic) compression.
-
-            # horizontal_bias ∈ [0,1]:
-                # lower → stronger horizontal compression
-                # higher → more balanced compression
-            # """
-
-            # if arr is None or arr.ndim != 2:
-                # return arr
-
-            # h, w = arr.shape
-
-            # # --- diagonal scaling ---
-            # max_diag = math.sqrt(max_res[0]**2 + max_res[1]**2)
-            # current_diag = math.sqrt(h**2 + w**2)
-
-            # if current_diag <= max_diag:
-                # return arr
-
-            # scale = current_diag / max_diag
-            # base_step = int(np.ceil(scale))
-
-            # # --- anisotropic steps ---
-            # horizontal_bias = np.clip(horizontal_bias, 0.0, 1.0)
-
-            # step_y = max(1, int(np.ceil(base_step * horizontal_bias)))
-            # step_x = max(1, int(np.ceil(base_step * (1 + (1 - horizontal_bias)))))
-
-            # new_h = h // step_y
-            # new_w = w // step_x
-
-            # reduced = np.zeros((new_h, new_w), dtype=arr.dtype)
-
-            # for i in range(new_h):
-                # for j in range(new_w):
-
-                    # block = arr[
-                        # i * step_y:(i + 1) * step_y,
-                        # j * step_x:(j + 1) * step_x
-                    # ]
-
-                    # if block.size == 0:
-                        # continue
-
-                    # flat = block.ravel()
-
-                    # # --- sign frequency ---
-                    # pos_mask = flat > 0
-                    # neg_mask = flat < 0
-
-                    # pos_count = np.sum(pos_mask)
-                    # neg_count = np.sum(neg_mask)
-
-                    # dominant_mask = pos_mask if pos_count >= neg_count else neg_mask
-
-                    # # fallback if all zeros
-                    # if not np.any(dominant_mask):
-                        # reduced[i, j] = 0
-                        # continue
-
-                    # # --- max amplitude within dominant sign ---
-                    # candidates = flat[dominant_mask]
-                    # idx = np.argmax(np.abs(candidates))
-                    # reduced[i, j] = candidates[idx]
-
-            # return reduced
-
-        def limit_resolution(arr, max_res=(291, 1250)):
+        def limit_resolution(arr, max_res=(291, 1250), method="Gaussian Anti-Aliased"):
             """
-            Downsample 2D seismic/image array using sign-frequency + max-amplitude logic.
-
-            For each block:
-            1) Determine dominant sign (most frequent: positive vs negative)
-            2) From that sign group, pick the value with highest absolute amplitude
+            Dispatcher function supporting multiple downscaling and anti-aliasing algorithms
+            for 2D seismic profiles.
             """
-
             if arr is None or arr.ndim != 2:
                 return arr
 
             h, w = arr.shape
-
             max_diag = math.sqrt(max_res[0]**2 + max_res[1]**2)
             current_diag = math.sqrt(h**2 + w**2)
 
@@ -1107,49 +1049,69 @@ class SeismicApp:
                 return arr
 
             scale = current_diag / max_diag
-            step = int(np.ceil(scale))
 
-            new_h = h // step
-            new_w = w // step
+            # --- Method 1: Standard Stride ---
+            if method == "Standard Stride":
+                step = int(np.ceil(scale))
+                return arr[::step, ::step]
 
-            reduced = np.zeros((new_h, new_w), dtype=arr.dtype)
+            # --- Method 2: Sign-Frequency + Max-Amplitude ---
+            elif method == "Sign-Frequency + Max-Amp":
+                step = int(np.ceil(scale))
+                new_h = h // step
+                new_w = w // step
+                reduced = np.zeros((new_h, new_w), dtype=arr.dtype)
 
-            for i in range(new_h):
-                for j in range(new_w):
+                for i in range(new_h):
+                    for j in range(new_w):
+                        block = arr[i*step:(i+1)*step, j*step:(j+1)*step]
+                        if block.size == 0:
+                            continue
+                        flat = block.flatten()
+                        pos_mask = flat > 0
+                        neg_mask = flat < 0
 
-                    block = arr[i*step:(i+1)*step, j*step:(j+1)*step]
+                        pos_count = np.sum(pos_mask)
+                        neg_count = np.sum(neg_mask)
 
-                    if block.size == 0:
-                        continue
+                        dominant_mask = pos_mask if pos_count >= neg_count else neg_mask
 
-                    flat = block.flatten()
+                        if not np.any(dominant_mask):
+                            reduced[i, j] = 0
+                            continue
 
-                    # --- 1) sign frequency ---
-                    pos_mask = flat > 0
-                    neg_mask = flat < 0
+                        candidates = flat[dominant_mask]
+                        idx = np.argmax(np.abs(candidates))
+                        reduced[i, j] = candidates[idx]
+                return reduced
 
-                    pos_count = np.sum(pos_mask)
-                    neg_count = np.sum(neg_mask)
+            # --- Method 3: Gaussian Anti-Aliased ---
+            elif method == "Gaussian Anti-Aliased":
+                step = int(np.ceil(scale))
+                sigma = 0.5 * step
+                smoothed = gaussian_filter(arr.astype(np.float64), sigma=(sigma, sigma))
+                new_h = h // step
+                new_w = w // step
+                return smoothed[:new_h * step:step, :new_w * step:step].copy()
 
-                    # choose dominant sign
-                    if pos_count >= neg_count:
-                        dominant_mask = pos_mask
-                    else:
-                        dominant_mask = neg_mask
+            # --- Method 4: Convolution Anti-Aliased ---
+            elif method == "Convolution Anti-Aliased":
+                step = int(np.ceil(scale))
+                kernel_size = max(3, 2 * step + 1)
+                if kernel_size % 2 == 0:
+                    kernel_size += 1
 
-                    # fallback if all zeros
-                    if not np.any(dominant_mask):
-                        reduced[i, j] = 0
-                        continue
+                kernel = np.ones((kernel_size, kernel_size), dtype=np.float64)
+                kernel /= kernel.sum()
 
-                    # --- 2) max amplitude within dominant sign ---
-                    candidates = flat[dominant_mask]
+                convolved = convolve2d(arr.astype(np.float64), kernel, mode='same', boundary='symm')
+                new_h = h // step
+                new_w = w // step
+                return convolved[:new_h * step:step, :new_w * step:step].copy()
 
-                    # pick value with max absolute amplitude but keep original sign
-                    idx = np.argmax(np.abs(candidates))
-                    reduced[i, j] = candidates[idx]
+            return arr
 
-            return reduced            
+            
         ######################################################    
 
         is_image_file = False
@@ -1280,7 +1242,16 @@ class SeismicApp:
             with segyio.open(file_path, "r", ignore_geometry=True) as f:
                 d = np.stack([f.trace[i] for i in range(f.tracecount)])
 
-            d = limit_resolution(d)  # new 
+
+            chosen_method = self.downscale_method_var.get()
+            target_res = (self.max_res_h_var.get(), self.max_res_w_var.get())
+
+            self.original_seismic_shape = d.shape
+            d = limit_resolution(d, max_res=target_res, method=chosen_method)
+
+            # To save the shape to a dedicated .npz file when processing the data:
+            np.savez("original_shape.npz", original_seismic_shape=self.original_seismic_shape)            
+            d = limit_resolution(d) 
             self.data = d
             self.is_image = False
             self.is_2d = True
@@ -1371,6 +1342,7 @@ class SeismicApp:
             spancoords='pixels', interactive=True
         )
 
+    # updated Gemini part |v|
     def on_select(self, eclick, erelease):
         # Coordinates in the plotted image matrix coordinate system
         y1_raw = int(eclick.ydata)
@@ -1465,8 +1437,9 @@ class SeismicApp:
             self.canvas_widget.draw_idle()
         self.ok_button.config(state=tk.DISABLED)
         self.label.config(text=error_msg)
+    # updated Gemini part |^|        
+            
 
- 
     def finalize_selection(self):
         if not self.selector_coords_y or not self.selector_coords_x:
             self.label.config(text="Please select a region first.")
@@ -1615,6 +1588,15 @@ class SeismicApp:
                 self.twt_spacing = self.rescaling_constant_var.get()
             if self.initial_inline is None:
                 self.initial_inline = int(self.l_threshold_entry.get())
+                
+            # Load original shape from the lightweight .npz file if missing
+            if self.original_seismic_shape is None:
+                try:
+                    loaded = np.load("original_shape.npz")
+                    self.original_seismic_shape = tuple(loaded["original_seismic_shape"])
+                except Exception:
+                    if self.data is not None:
+                        self.original_seismic_shape = self.data.shape                
 
             self.root.withdraw()
             launch_plotting_gui(self)
@@ -1818,16 +1800,23 @@ def launch_second_gui(app):
 
                         ## for paper
                         # extracting pure outlines and blobs
-            #             outlines = find_puddles_cv2(mask_n, connectivity=4)
-            #             outlines = custome_floodfill_process(outlines, arr, length_limit)
-            #             outlines_and_blobs = custome_floodfill_process(outlines_and_blobs, arr, length_limit=2)  # length_limit=2 to keep blobs
-            #             blobs = exclude_sub_lines(outlines_and_blobs, outlines) 
+                        outlines = find_puddles_cv2(mask_n, connectivity=4)
+                        outlines = custome_floodfill_process(outlines, arr, length_limit)
+                        outlines_and_blobs = custome_floodfill_process(outlines_and_blobs, arr, length_limit=2)  # length_limit=2 to keep blobs
+                        blobs = exclude_sub_lines(outlines_and_blobs, outlines) 
+                        
+                        ## for paper
+                        np_data = [np.array(line) for line in outlines]
+                        np.savez("outlines.npz", *np_data) 
+                        np_data = [np.array(line) for line in blobs]
+                        np.savez("blobs.npz", *np_data)                     
+                        ##                        
 
             #           ##
-            #             np_data = [np.array(line) for line in stripe_coordinates]
-            #             np.savez("classic.npz", *np_data)   
-            #             np_data = [np.array(line) for line in stripe_coordinates_n]
-            #             np.savez("floodfill.npz", *np_data)   
+                        np_data = [np.array(line) for line in stripe_coordinates]
+                        np.savez("classic.npz", *np_data)   
+                        np_data = [np.array(line) for line in stripe_coordinates_f]
+                        np.savez("floodfill.npz", *np_data)   
                         ##                                             
 
                         stripe_coordinates += stripe_coordinates_f
@@ -1902,8 +1891,9 @@ def launch_second_gui(app):
             use_mask = use_mask_var.get()   # 1 = Yes, 0 = No
             use_mask2 = use_mask_var2.get()  # 1 = Mask, 0 = Layer
             use_mask3 = use_mask_var3.get()  # 2 = None,1 = Simple, 0 = Full
+            stripe_coordinates_n = [] 
             
-            if  use_mask3 == 0:
+            if use_mask3 == 0:
                 
                 stripe_coordinates_n = floodfill_verticalpolarity(arr, length_limit, mode=mode, option='arr')
             
@@ -1912,16 +1902,13 @@ def launch_second_gui(app):
                     np_data = [np.array(line) for line in stripe_coordinates_n]
                     np.savez("contours.npz", flag=np.array([0]), *np_data) 
                     messagebox.showinfo("Saved", f"Saved contours.npz with {len(stripe_coordinates_n)} lines (no mask used).")
-#                     ## for paper
-#                     np_data = [np.array(line) for line in outlines]
-#                     np.savez("outlines.npz", *np_data) 
-#                     np_data = [np.array(line) for line in blobs]
-#                     np.savez("blobs.npz", *np_data)                     
-#                    ##
+
 
                 elif use_mask == 1 and use_mask3 == 0:  # Full method
                     np_data = [np.array(line) for line in stripe_coordinates_n]
                     np.savez("contours.npz", flag=np.array([1]), *np_data)   # notice 1 flag of contours_n
+                    
+                    stripe_coordinates = [] 
                 
                     if use_mask2 == 1:  # Masks
                         data_npz = np.load("masks.npz")
@@ -2109,10 +2096,11 @@ def launch_second_and_quarter_gui(app):
         manual_npz = np.load("manual.npz")
         manual = [list(map(tuple, manual_npz[key])) for key in manual_npz if key != "flag"]            
         if contours_lines != manual:  # this ensures Simple mode is not activated because in Simple contours.npz and manual.npz are the same
-            contours_lines+= manual
+            # making contours_lines bresenham for easier click event
+            contours_lines = bresenham_line(contours_lines)            
+            contours_lines = split_lines_at_shared_points(manual, contours_lines)   # new (makes no itnersection with manual) 
+            contours_lines += manual
             
-    # making contours_lines bresenham for easier click event
-    contours_lines = bresenham_line(contours_lines)
 
 
 
@@ -2571,206 +2559,155 @@ def launch_fifth_gui(app):
 
     app.feature_root = tk.Toplevel(app.root)
     app.feature_root.title("Feature Extraction")
-    #center_window(app.feature_root)                            
 
-
-    flbm_global = None
     # Load and map data
-    np_data = np.load("smooth.npz") 
-    smsl = [list(map(tuple, np_data[key])) for key in np_data]
+    try:
+        np_data = np.load("feature.npz")
+        smsl = [list(map(tuple, np_data[key])) for key in np_data]
+    except Exception:
+        smsl = []
 
-    # Point-to-line mapping
-    point_to_lines = {}
-    for idx, line in enumerate(smsl):
-        for pt in line:
-            if pt not in point_to_lines:
-                point_to_lines[pt] = []
-            point_to_lines[pt].append(idx)
-
-    # GUI state
-    selection_mode = tk.StringVar(value="")  # "top" or "bottom" or ""
-    top_and_bottom_idx = [[], []]  # [top_idx, bottom_idx]
+    select_tolerance = 2
+    last_selected_idx = [None]
+    top_idx = [None]
+    bottom_idx = [None]
 
     # Initial plot
     fig, ax = plot_layers_GUI(smsl)
     canvas = FigureCanvasTkAgg(fig, master=app.feature_root)
     canvas_widget = canvas.get_tk_widget()
-    canvas_widget.grid(row=0, column=0, columnspan=3)
+    canvas_widget.grid(row=0, column=0, columnspan=4, padx=6, pady=6)
 
     # Redraw helper
-    def update_plot_with_highlight(selected_idx):
-        new_fig, new_ax = plot_layers_GUI(smsl, marked_layers=smsl[selected_idx])
-        # Replace the entire canvas with a new figure
-        canvas.figure = new_fig
-        canvas._tkcanvas.destroy()
-        new_canvas_widget = FigureCanvasTkAgg(new_fig, master=app.feature_root)
-        new_canvas_widget.get_tk_widget().grid(row=0, column=0, columnspan=3)
-        new_canvas_widget.draw()
-        canvas.__dict__.update(new_canvas_widget.__dict__)  # Sync internal state
+    def refresh_canvas(highlight_idx=None):
+        new_fig, new_ax = plot_layers_GUI(smsl)
+
+        # Highlight top/bottom markers if set
+        for idx, line in enumerate(smsl):
+            if not line:
+                continue
+            xs = [p[0] for p in line]
+            ys = [p[1] for p in line]
+            if idx == top_idx[0]:
+                new_ax.plot(xs, ys, color='blue', linewidth=2.0, zorder=5)
+            elif idx == bottom_idx[0]:
+                new_ax.plot(xs, ys, color='green', linewidth=2.0, zorder=5)
+
+        # Highlight currently selected layer in red
+        if highlight_idx is not None and highlight_idx < len(smsl) and smsl[highlight_idx]:
+            line = smsl[highlight_idx]
+            xs = [p[0] for p in line]
+            ys = [p[1] for p in line]
+            new_ax.plot(xs, ys, color='red', linewidth=2.5, zorder=6)
+
+        nonlocal canvas
+        try:
+            canvas._tkcanvas.destroy()
+        except Exception:
+            pass
+        canvas = FigureCanvasTkAgg(new_fig, master=app.feature_root)
+        canvas.get_tk_widget().grid(row=0, column=0, columnspan=4, padx=6, pady=6)
+        canvas.draw()
         canvas.mpl_connect("button_press_event", on_canvas_click)
 
-
+    # Utility: find candidate line indices near (x,y) in data coords
+    def find_candidate_indices(x, y, tol=select_tolerance):
+        candidates = set()
+        for idx, line in enumerate(smsl):
+            if not line:
+                continue
+            for px, py in line:
+                if abs(px - x) <= tol and abs(py - y) <= tol:
+                    candidates.add(idx)
+                    break
+        return list(candidates)
 
     # Event: canvas click
     def on_canvas_click(event):
-        if selection_mode.get() not in ["top", "bottom", "remove"]:
-            return  # do nothing if no mode is active
+        if event.xdata is None or event.ydata is None:
+            return
 
-        # Convert canvas to data coordinates
-        inv = ax.transData.inverted()
-        x, y = inv.transform((event.x, event.y))
-        clicked = (round(x), round(y))
+        x_click = round(event.xdata)
+        y_click = round(event.ydata)
 
-        # Find lines containing this point
-        candidates = [idx for pt, indices in point_to_lines.items() if abs(pt[0] - clicked[0]) <= 1 and abs(pt[1] - clicked[1]) <= 1 for idx in indices]
+        candidates = find_candidate_indices(x_click, y_click, tol=select_tolerance)
         if not candidates:
-            messagebox.showinfo("Invalid", "Please try again.")
             return
 
-        # Choose the longest line
-        selected_idx = max(set(candidates), key=lambda idx: len(smsl[idx]))
+        # Choose the longest line among candidates
+        selected_idx = max(candidates, key=lambda ii: len(smsl[ii]))
+        last_selected_idx[0] = selected_idx
+        refresh_canvas(highlight_idx=selected_idx)
 
-        # Update state and GUI
-        if selection_mode.get() == "top":
-            top_and_bottom_idx[0] = selected_idx
-            top_btn.config(state="disabled")
-            remove_btn.config(state="disabled")
-        elif selection_mode.get() == "bottom":
-            top_and_bottom_idx[1] = selected_idx
-            bottom_btn.config(state="disabled")
-            remove_btn.config(state="disabled")
-        elif selection_mode.get() == "remove":
-            update_plot_with_highlight(selected_idx)
-            confirm = messagebox.askyesno("Confirm Deletion", f"Do you want to delete layer {selected_idx}?")
-            if confirm:
-                smsl[selected_idx] = []
-            
-
-        update_plot_with_highlight(selected_idx)
-        selection_mode.set("")
-
-        if all(isinstance(i, int) for i in top_and_bottom_idx):
-            export_btn.config(state="normal")
-
-    canvas.mpl_connect("button_press_event", on_canvas_click)
-
-    # Event handlers for buttons
-    def activate_top_select():
-        selection_mode.set("top")
-
-    def activate_bottom_select():
-        selection_mode.set("bottom")
-        
-    def activate_remove_select():
-        selection_mode.set("remove")        
-        
-    def save_final_figure():
-        try:
-            width = int(width_entry.get())
-            height = int(height_entry.get())
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Width and height must be integers.")
+    # Action 1: Delete selected layer
+    def delete_layer():
+        idx = last_selected_idx[0]
+        if idx is None or not smsl[idx]:
             return
+        if messagebox.askyesno("Confirm Deletion", f"Do you want to delete layer {idx}?"):
+            smsl[idx] = []
+            last_selected_idx[0] = None
+            refresh_canvas()
 
-        dpi = 100
-        fig_size = (width / dpi, height / dpi)
-        fig = Figure(figsize=fig_size, dpi=dpi)
-        ax = fig.add_subplot(111)
-
-        if not flbm_global:
-            messagebox.showinfo("No Feature", "No feature to save yet.")
+    # Action 2: Set as top layer (remove layers above it)
+    def set_top_layer():
+        idx = last_selected_idx[0]
+        if idx is None or not smsl[idx]:
             return
+        top_idx[0] = idx
+        sel_mean_y = sum(p[1] for p in smsl[idx]) / len(smsl[idx])
+        for i, line in enumerate(smsl):
+            if line:
+                line_mean_y = sum(p[1] for p in line) / len(line)
+                if line_mean_y < sel_mean_y:
+                    smsl[i] = []
+        refresh_canvas(highlight_idx=idx)
 
-        # Plot flbm without marked layers
-        all_x = []
-        all_y = []
+    # Action 3: Set as bottom layer (remove layers below it)
+    def set_bottom_layer():
+        idx = last_selected_idx[0]
+        if idx is None or not smsl[idx]:
+            return
+        bottom_idx[0] = idx
+        sel_mean_y = sum(p[1] for p in smsl[idx]) / len(smsl[idx])
+        for i, line in enumerate(smsl):
+            if line:
+                line_mean_y = sum(p[1] for p in line) / len(line)
+                if line_mean_y > sel_mean_y:
+                    smsl[i] = []
+        refresh_canvas(highlight_idx=idx)
 
-        def process(layer):
-            unique = list(set(layer))
-            return sorted(unique, key=lambda pt: pt[0])
-
-        for line in flbm_global:
-            cleaned = process(line)
-            if cleaned:
-                x = [pt[0] for pt in cleaned]
-                y = [pt[1] for pt in cleaned]
-                all_x.extend(x)
-                all_y.extend(y)
-                ax.plot(x, y, c='black', linewidth=1)
-
-        if all_x and all_y:
-            ax.set_xlim(min(all_x), max(all_x))
-            ax.set_ylim(min(all_y), max(all_y))
-
-        ax.axis('off')
-        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-        fig.savefig("feature.png", bbox_inches='tight', pad_inches=0, dpi=dpi)
-        messagebox.showinfo("Saved", "Saved as feature.png")
-        
-
-        
-    def export_result():
-        nonlocal flbm_global
-        print("Top and Bottom Layer Indices:", top_and_bottom_idx)
-        messagebox.showinfo("Exported", f"Top: {top_and_bottom_idx[0]}, Bottom: {top_and_bottom_idx[1]}")
-
-        # === Step 1: Extract and filter ===
-        maxdownlaps = [smsl[idx] for idx in top_and_bottom_idx]
-        flbm = filter_lines_between_maxdownlaps(smsl, maxdownlaps, threshold=0.90)
-        flbm_global = flbm
-        print(f"Extracted feature {len(flbm)}")
-
-        # === Step 2: Save result ===
-        np_data = [np.array(line) for line in flbm]
-        np.savez("feature.npz", *np_data)
-
-        # === Step 3: Update canvas with new data ===
-        new_fig, new_ax = plot_layers_GUI(flbm)
-        canvas.figure = new_fig
-        canvas._tkcanvas.destroy()
-        new_canvas_widget = FigureCanvasTkAgg(new_fig, master=app.feature_root)
-        new_canvas_widget.get_tk_widget().grid(row=0, column=0, columnspan=3)
-        new_canvas_widget.draw()
-        canvas.__dict__.update(new_canvas_widget.__dict__)
-        canvas.mpl_connect("button_press_event", on_canvas_click)
-        save_btn.config(state="normal")  # Enable save button
-        save_btn.config(command=save_final_figure)
-
-
+    # Action 4: Save current state (always active)
+    def save_feature():
+        valid_lines = [line for line in smsl if line]
+        np_data_out = [np.array(line) for line in valid_lines]
+        np.savez("feature.npz", *np_data_out)
+        messagebox.showinfo("Saved", "Current state saved to feature.npz")
 
     # Buttons
-    top_btn = tk.Button(app.feature_root, text="Select Top Layer", command=activate_top_select)
-    top_btn.grid(row=1, column=0)
+    delete_btn = tk.Button(app.feature_root, text="Delete Layer", command=delete_layer)
+    delete_btn.grid(row=1, column=0, padx=6, pady=6)
 
-    bottom_btn = tk.Button(app.feature_root, text="Select Bottom Layer", command=activate_bottom_select)
-    bottom_btn.grid(row=1, column=1)
-    
-    remove_btn = tk.Button(app.feature_root, text="Select Removing Layer", command=activate_remove_select)
-    remove_btn.grid(row=1, column=3)    
+    top_btn = tk.Button(app.feature_root, text="Select Bottom Layer", command=set_top_layer)
+    top_btn.grid(row=1, column=1, padx=6, pady=6)
 
-    export_btn = tk.Button(app.feature_root, text="Export Top and Bottom", command=export_result, state="disabled")
-    export_btn.grid(row=1, column=2)
-    
-    tk.Label(app.feature_root, text="Width:").grid(row=2, column=0)
-    width_entry = tk.Entry(app.feature_root)
-    width_entry.insert(0, "512")
-    width_entry.grid(row=2, column=1)
+    bottom_btn = tk.Button(app.feature_root, text="Select Top Layer", command=set_bottom_layer)
+    bottom_btn.grid(row=1, column=2, padx=6, pady=6)
 
-    tk.Label(app.feature_root, text="Height:").grid(row=3, column=0)
-    height_entry = tk.Entry(app.feature_root)
-    height_entry.insert(0, "512")
-    height_entry.grid(row=3, column=1)
+    save_btn = tk.Button(app.feature_root, text="Save Feature", command=save_feature)
+    save_btn.grid(row=1, column=3, padx=6, pady=6)
 
-    save_btn = tk.Button(app.feature_root, text="Save Feature Image", state="disabled")
-    save_btn.grid(row=4, column=0, columnspan=3)
-    
     # --- Back to Home handling ---
     def back_to_home():
         app.feature_root.destroy()
         app.root.deiconify()
 
     back_btn = tk.Button(app.feature_root, text="⬅ Back to Home", command=back_to_home)
-    back_btn.grid(row=4, column=1, columnspan=3)
+    back_btn.grid(row=2, column=0, columnspan=4, pady=8)
+
+    # Initial canvas connection
+    canvas.mpl_connect("button_press_event", on_canvas_click)
+    refresh_canvas()
     
     
 #Layer
@@ -2986,7 +2923,6 @@ def launch_Layer_selector(app):
 
     # When GUI closes, return Layer so caller can use them
     return Layer
-    
 
     
 #####################################################################################
@@ -3892,7 +3828,8 @@ def launch_plotting_gui(app):
                         close_option=True,
                         fixed_name="cropped",
                         return_fig=True,
-                        svg_option=svg_option
+                        svg_option=svg_option,
+                        original_seismic_shape=app.original_seismic_shape                        
                     )
 
                 elif overlay_opt == "original":
@@ -3915,7 +3852,8 @@ def launch_plotting_gui(app):
                         close_option=True,
                         fixed_name="cropped",
                         return_fig=True,
-                        svg_option=svg_option
+                        svg_option=svg_option,
+                        original_seismic_shape=app.original_seismic_shape                        
                     )
 
                 elif overlay_opt == "marked":
@@ -3948,6 +3886,7 @@ def launch_plotting_gui(app):
                         initial_inline=initial_inline,
                         crossline=crossline,
                         line_color=line_color,
+                        original_seismic_shape=app.original_seismic_shape,                                                
                         return_fig=True,
                         close_option=False,
                         svg_option=svg_option
@@ -3998,6 +3937,7 @@ def launch_plotting_gui(app):
                         y_start=y_start,
                         twt_spacing=twt_spacing,
                         seismic_profile_shape=seismic_profile_shape,
+                        original_seismic_shape=app.original_seismic_shape,
                         return_fig=True,
                         svg_option=svg_option
                     )
@@ -4021,6 +3961,7 @@ def launch_plotting_gui(app):
                         line_color=line_color,
                         return_fig=True,
                         close_option=False,
+                        original_seismic_shape=app.original_seismic_shape,                                                
                         svg_option=svg_option
                     )
 
@@ -4054,6 +3995,7 @@ def launch_plotting_gui(app):
                         y_start=y_start,
                         twt_spacing=twt_spacing,
                         seismic_profile_shape=seismic_profile_shape,
+                        original_seismic_shape=app.original_seismic_shape,                        
                         line_color=line_color,
                         return_fig=True,
                         svg_option=svg_option
@@ -4153,5 +4095,4 @@ def main():
 if __name__ == "__main__":
     multiprocessing.freeze_support() # This line stops the subprocesses from re-running main() recursively
     
-
     main()
