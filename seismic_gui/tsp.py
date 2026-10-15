@@ -3798,6 +3798,7 @@ def plot_layers(
     y_start=0,
     twt_spacing=4,
     seismic_profile_shape=(950, 460),  # F3 inline dimension
+    original_seismic_shape=None,    
     seismic_profile=None,
     alpha=0.7,
     seismic_relief=99,
@@ -3952,14 +3953,16 @@ def plot_layers(
             return (min(xs), max(xs), min(ys), max(ys))
 
         # --- Helper: scale lines to target dims using REF bbox ---
-        def scale_lines_using_ref(lines, ref_bbox, dims):
+        # y_scale=None -> old logic (stretch bbox height to fill frame height)
+        # y_scale=value -> fixed vertical scale (no stretching), used with blank offset
+        def scale_lines_using_ref(lines, ref_bbox, dims, y_scale=None):
             if ref_bbox is None:
                 return rescale_lines_to_image(lines, dims)
-            min_x, max_x, min_y, max_y = ref_bbox
+            min_x, max_x, min_y, max_y_ = ref_bbox
             w, h = dims
             scaled = []
             dx = (max_x - min_x) if (max_x - min_x) != 0 else 1.0
-            dy = (max_y - min_y) if (max_y - min_y) != 0 else 1.0
+            dy = (max_y_ - min_y) if (max_y_ - min_y) != 0 else 1.0
             for line in lines:
                 if not line:
                     scaled.append([])
@@ -3967,7 +3970,10 @@ def plot_layers(
                 pts = []
                 for (x, y) in line:
                     sx = ((x - min_x) / dx) * (w - 1) if w > 1 else 0.0
-                    sy = ((y - min_y) / dy) * (h - 1) if h > 1 else 0.0
+                    if y_scale is not None:
+                        sy = (y - min_y) * y_scale
+                    else:
+                        sy = ((y - min_y) / dy) * (h - 1) if h > 1 else 0.0
                     pts.append((sx, sy))
                 scaled.append(pts)
             return scaled
@@ -3975,13 +3981,33 @@ def plot_layers(
         # Compute bbox from MAIN layers ONLY
         main_bbox = bbox_of_lines(layers)
 
+        # --- Extra condition: same width as array frame, but lacking height ---
+        y_scale = None
+        blank_offset = 0.0
+        if main_bbox is not None:
+            bb_min_x, bb_max_x, bb_min_y, bb_max_y = main_bbox
+            bbox_w = bb_max_x - bb_min_x
+            bbox_h = bb_max_y - bb_min_y
+            frame_w_units = n_traces - 1      # array frame width in pixel units
+            frame_h_units = n_samples - 1     # array frame height in pixel units
+            tol = 1.0                         # tolerance in pixels
+
+            same_width = abs(bbox_w - frame_w_units) <= tol
+            lacks_height = bbox_h < (frame_h_units - tol)
+
+            if same_width and lacks_height and frame_h_units > 0:
+                # keep the frame's own vertical scale instead of stretching
+                y_scale = (target_h - 1) / frame_h_units
+                # blank space (in plot units) that the layers lack from frame height
+                blank_offset = (target_h - 1) - bbox_h * y_scale
+
         # Scale main layers
-        scaled_main = scale_lines_using_ref(layers, main_bbox, (target_w, target_h))
+        scaled_main = scale_lines_using_ref(layers, main_bbox, (target_w, target_h), y_scale=y_scale)
 
         # Scale marked layers
         marked_scaled = None
         if marked_layers:
-            marked_scaled = scale_lines_using_ref(marked_layers, main_bbox, (target_w, target_h))
+            marked_scaled = scale_lines_using_ref(marked_layers, main_bbox, (target_w, target_h), y_scale=y_scale)
 
         if not scaled_main or not any(scaled_main):
             max_y = float(target_h)
@@ -4061,13 +4087,32 @@ def plot_layers(
         ax.set_yticks(twt_ticks)
         ax.tick_params(axis='y', labelsize=fs[2])
         ax.tick_params(axis='x', labelsize=fs[2])
-        twt_labels = [f"{int(v)}" for v in twt_ticks]
+
+        # --- tick-label scale factors: original / current (labels only, data untouched) ---
+        if original_seismic_shape is not None:
+            orig_traces, orig_samples = original_seismic_shape
+            x_scale = orig_traces / n_traces        # x_original / x_current
+            y_scale_lbl = orig_samples / n_samples  # y_original / y_current
+        else:
+            x_scale = 1.0
+            y_scale_lbl = 1.0
+
+        # y labels: scaled relative to y_start, then reversed as before
+        twt_labels = [f"{int(round(y_start + (v - y_start) * y_scale_lbl))}" for v in twt_ticks]
         ax.set_yticklabels(list(reversed(twt_labels)))
 
         # Set limits based ONLY on transformed MAIN-layer points
+        # (blank_offset extends the top of the frame when layers lack height)
         if all_x_coords and all_y_coords:
             ax.set_xlim(min(all_x_coords), max(all_x_coords))
-            ax.set_ylim(min(all_y_coords), max(all_y_coords))
+            ax.set_ylim(min(all_y_coords), max(all_y_coords) + blank_offset)
+
+        # x labels: only rewritten when an original shape is given
+        if original_seismic_shape is not None:
+            x_lo, x_hi = ax.get_xlim()
+            x_ticks = np.linspace(x_lo, x_hi, num_ticks)
+            ax.set_xticks(x_ticks)
+            ax.set_xticklabels([f"{int(round(x_start + (v - x_start) * x_scale))}" for v in x_ticks])
 
     # Save option
     if save_option:
@@ -4095,12 +4140,12 @@ def plot_layers(
         plt.show()
 
     plt.close(fig)
+    
 
 
 
 
-
-def plot_layers_GUI(layers, marked_layers=False, pixels=512, line_color='red'):
+def plot_layers_GUI(layers, marked_layers=False, pixels=512):
     """Return a matplotlib Figure and Axes with layers and optional marked layers plotted."""
     # Normalize input
     if isinstance(layers[0], tuple):
@@ -4139,7 +4184,7 @@ def plot_layers_GUI(layers, marked_layers=False, pixels=512, line_color='red'):
                 y = [pt[1] for pt in cleaned]
                 all_x_coords.extend(x)
                 all_y_coords.extend(y)
-                ax.plot(x, y, c=line_color, linewidth=2)
+                ax.plot(x, y, c='red', linewidth=2)
 
     # Set axis limits
     if all_x_coords and all_y_coords:
@@ -4150,7 +4195,6 @@ def plot_layers_GUI(layers, marked_layers=False, pixels=512, line_color='red'):
     fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
 
     return fig, ax
-
 
 
 
@@ -6176,7 +6220,8 @@ def plot_seismic_CROPPED(
     close_option=True,
     fixed_name="Seismic Profile",
     return_fig=False,
-    svg_option=False
+    svg_option=False,
+    original_seismic_shape=None   # (n_traces, n_samples) of the original, un-downsampled array    
 ):
     """Plot seismic_profile where rows=time samples and cols=CDP/traces.
        x_start is CDP index; y_start is TWT in same units as twt_spacing (e.g., ms).
@@ -6241,16 +6286,29 @@ def plot_seismic_CROPPED(
         num_ticks = int(width_px/85)  # 6 for 512 px
         twt_ticks = np.linspace(y_start, y_end, num_ticks)
         cdp_ticks = np.linspace(x_start, x_end, num_ticks)
-        
+
         # Round to nearest integer and convert to int
         twt_ticks = np.round(twt_ticks).astype(int)
-        cdp_ticks = np.round(cdp_ticks).astype(int)        
+        cdp_ticks = np.round(cdp_ticks).astype(int)
 
         ax.set_yticks(twt_ticks)      # TWT on y-axis
         ax.set_xticks(cdp_ticks)      # CDP on x-axis (fixed)
 
-        # show labels inverted top->bottom as you prefer (top label = y_end, bottom = y_start)
-        twt_labels = [f"{int(v)}" for v in twt_ticks]
+        # --- tick-label scale factors: original / current (labels only, data untouched) ---
+        if original_seismic_shape is not None:
+            orig_traces, orig_samples = original_seismic_shape
+            x_scale = orig_traces / n_traces        # x_original / x_current
+            y_scale_lbl = orig_samples / n_samples  # y_original / y_current
+        else:
+            x_scale = 1.0
+            y_scale_lbl = 1.0
+
+        # x labels: scaled relative to x_start
+        cdp_labels = [f"{int(round(x_start + (v - x_start) * x_scale))}" for v in cdp_ticks]
+        ax.set_xticklabels(cdp_labels)
+
+        # y labels: scaled relative to y_start, then reversed as before
+        twt_labels = [f"{int(round(y_start + (v - y_start) * y_scale_lbl))}" for v in twt_ticks]
         ax.set_yticklabels(list(reversed(twt_labels)))
 
     
@@ -6869,7 +6927,9 @@ def map_amplitude_to_lines(
     line_color='lime',
     return_fig=False,
     close_option=False,
-    svg_option=False
+    svg_option=False,
+    seismic_profile_shape=(950, 460),  # (n_traces, n_samples), used only if seismic_profile is None
+    original_seismic_shape=None        # (n_traces, n_samples) of the original, un-downsampled array
 ):
 
     dpi = 100
@@ -6877,19 +6937,21 @@ def map_amplitude_to_lines(
     # -------------------------------
     # Input validation
     # -------------------------------
-    if not isinstance(seismic_profile, np.ndarray) or seismic_profile.ndim != 2:
-        raise ValueError("seismic_profile must be a 2D numpy array")
+    if seismic_profile is not None:
+        if not isinstance(seismic_profile, np.ndarray) or seismic_profile.ndim != 2:
+            raise ValueError("seismic_profile must be a 2D numpy array (or None)")
 
     if isinstance(pixels, int):
         width_px, height_px = pixels, pixels
     else:
         width_px, height_px = pixels
 
-    seismic_relief = np.clip(seismic_relief, 51, 100)
-    vm = np.percentile(seismic_profile, seismic_relief)
+    # seismic geometry: from the array if present, otherwise from the given shape
+    if seismic_profile is not None:
+        n_traces, n_samples = seismic_profile.shape
+    else:
+        n_traces, n_samples = seismic_profile_shape
 
-    # seismic geometry
-    n_traces, n_samples = seismic_profile.shape
     x_end = x_start + n_traces
     y_end = y_start + n_samples * twt_spacing
 
@@ -6898,15 +6960,24 @@ def map_amplitude_to_lines(
     # -------------------------------
     fig, ax = plt.subplots(figsize=(width_px / dpi, height_px / dpi), dpi=dpi)
 
-    ax.imshow(
-        seismic_profile.T,
-        cmap='RdBu',
-        vmin=-vm,
-        vmax=vm,
-        aspect='auto',
-        extent=[x_start, x_end, y_start, y_end],
-        origin='upper'
-    )
+    # --- Plot seismic background if available ---
+    if seismic_profile is not None:
+        seismic_relief = np.clip(seismic_relief, 51, 100)
+        vm = np.percentile(seismic_profile, seismic_relief)
+
+        ax.imshow(
+            seismic_profile.T,
+            cmap='RdBu',
+            vmin=-vm,
+            vmax=vm,
+            aspect='auto',
+            extent=[x_start, x_end, y_start, y_end],
+            origin='upper'
+        )
+    else:
+        # no array: set the frame explicitly so axes match the seismic geometry
+        ax.set_xlim(x_start, x_end)
+        ax.set_ylim(y_start, y_end)
 
     # -------------------------------
     # Normalize lines
@@ -6917,11 +6988,51 @@ def map_amplitude_to_lines(
     # -------------------------------
     # Scale lines to seismic world space
     # -------------------------------
-    scaled_lines = rescale_lines_to_image(
-        lines,
-        dimensions=(x_end - x_start, y_end - y_start),
-        offset=(x_start, y_start)
-    )
+    # --- bbox of the lines (pixel units) ---
+    xs_all = [p[0] for ln in lines for p in ln]
+    ys_all = [p[1] for ln in lines for p in ln]
+
+    use_blank_offset = False
+    if xs_all:
+        bb_min_x, bb_max_x = min(xs_all), max(xs_all)
+        bb_min_y, bb_max_y = min(ys_all), max(ys_all)
+        bbox_w = bb_max_x - bb_min_x
+        bbox_h = bb_max_y - bb_min_y
+
+        frame_w_units = n_traces - 1      # frame width in pixel units
+        frame_h_units = n_samples - 1     # frame height in pixel units
+        tol = 1.0                         # tolerance in pixels
+
+        same_width = abs(bbox_w - frame_w_units) <= tol
+        lacks_height = bbox_h < (frame_h_units - tol)
+
+        use_blank_offset = same_width and lacks_height and frame_h_units > 0
+
+    target_w = x_end - x_start
+    target_h = y_end - y_start
+
+    if use_blank_offset:
+        # Same width as frame, but lacking height:
+        # keep the frame's own vertical scale (no stretching) and leave the
+        # missing height as blank space at the top of the frame.
+        dx = bbox_w if bbox_w != 0 else 1.0
+        y_scale = (target_h - 1) / frame_h_units
+
+        scaled_lines = []
+        for ln in lines:
+            pts = []
+            for (x, y) in ln:
+                sx = ((x - bb_min_x) / dx) * (target_w - 1) + x_start
+                sy = (y - bb_min_y) * y_scale + y_start
+                pts.append((sx, sy))
+            scaled_lines.append(pts)
+    else:
+        # old logic: stretch lines to fill the frame
+        scaled_lines = rescale_lines_to_image(
+            lines,
+            dimensions=(target_w, target_h),
+            offset=(x_start, y_start)
+        )
 
     if isinstance(scaled_lines[0], tuple):
         scaled_lines = [scaled_lines]
@@ -6939,8 +7050,8 @@ def map_amplitude_to_lines(
         # transformed.append(tmp)
 
     #transformed = flip_layers(transformed)
-    
-    transformed = scaled_lines    
+
+    transformed = scaled_lines
 
     # -------------------------------
     # Plot lines (ALWAYS)
@@ -6967,7 +7078,25 @@ def map_amplitude_to_lines(
         num_ticks = 6
         twt_ticks = np.linspace(y_start, y_end, num_ticks)
         ax.set_yticks(twt_ticks)
-        ax.set_yticklabels(list(reversed([f"{int(v)}" for v in twt_ticks])))
+
+        # --- tick-label scale factors: original / current (labels only, data untouched) ---
+        if original_seismic_shape is not None:
+            orig_traces, orig_samples = original_seismic_shape
+            x_scale = orig_traces / n_traces        # x_original / x_current
+            y_scale_lbl = orig_samples / n_samples  # y_original / y_current
+        else:
+            x_scale = 1.0
+            y_scale_lbl = 1.0
+
+        # y labels: scaled relative to y_start, then reversed as before
+        twt_labels = [f"{int(round(y_start + (v - y_start) * y_scale_lbl))}" for v in twt_ticks]
+        ax.set_yticklabels(list(reversed(twt_labels)))
+
+        # x labels: only rewritten when an original shape is given
+        if original_seismic_shape is not None:
+            x_ticks = np.linspace(x_start, x_end, num_ticks)
+            ax.set_xticks(x_ticks)
+            ax.set_xticklabels([f"{int(round(x_start + (v - x_start) * x_scale))}" for v in x_ticks])
 
     # -------------------------------
     # Save
@@ -6978,7 +7107,7 @@ def map_amplitude_to_lines(
         pad_inches=0,
         dpi=dpi
     )
-    
+
     if svg_option:
         plt.savefig(
             f"seismic_plot_mapped_{inline}.svg",
@@ -6994,8 +7123,6 @@ def map_amplitude_to_lines(
         plt.show()
 
     plt.close(fig)
-
-
 
 
 
@@ -7588,4 +7715,64 @@ def find_new_point_groups(lines_before, lines_after):
             new_point_groups.append(subgroup)
 
     return new_point_groups
+    
+    
+def split_lines_at_shared_points(longer_lines, shorter_lines):
+    """
+    Split every line in shorter_lines at points it shares with any line in longer_lines.
+
+    - A shared point is removed from the line and splits it into separate segments,
+      e.g. [p1, p2, p3, p4, p5] with p3 shared -> [p1, p2] and [p4, p5].
+    - Shared points at the ends just trim the line; empty segments are never created.
+    - A line may have several shared points (with several longer lines); every resulting
+      segment is checked by size.
+    - Size = number of points. Segments created by splitting that have fewer points than
+      the shortest line originally in shorter_lines are removed.
+    - Lines that share no point with longer_lines are returned unchanged.
+    - Points are matched exactly (no tolerance), and no new points are calculated.
+    """
+
+    # Normalize single-line input to list of lines
+    if longer_lines and isinstance(longer_lines[0], tuple):
+        longer_lines = [longer_lines]
+    if shorter_lines and isinstance(shorter_lines[0], tuple):
+        shorter_lines = [shorter_lines]
+
+    if not shorter_lines:
+        return []
+
+    # All points that belong to any longer line (hashable tuples)
+    shared_points = {tuple(p) for line in longer_lines for p in line}
+
+    # Size of the shortest original line in shorter_lines
+    min_len = min(len(line) for line in shorter_lines if line)
+
+    result = []
+    for line in shorter_lines:
+        if not line:
+            continue
+
+        segments = []
+        current = []
+        was_split = False
+
+        for p in line:
+            if tuple(p) in shared_points:
+                was_split = True
+                if current:                 # close the running segment (never append empty)
+                    segments.append(current)
+                    current = []
+            else:
+                current.append(p)
+
+        if current:
+            segments.append(current)
+
+        if not was_split:
+            result.append(line)             # untouched line, keep as is
+        else:
+            # keep only segments that are not shorter than the shortest original line
+            result.extend(seg for seg in segments if len(seg) >= min_len)
+
+    return result
     
